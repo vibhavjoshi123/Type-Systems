@@ -3,12 +3,11 @@ set -e
 
 # ============================================================
 #  Hypergraph Context Graph - Quickstart Script
-#  Pulls code, installs deps, configures env, sets up TypeDB,
-#  and starts the API server.
+#  Pulls code, creates venv, installs deps, configures env,
+#  sets up TypeDB, and starts the API server.
 #
-#  Run from anywhere:
-#    bash scripts/quickstart.sh        (if inside the repo)
-#    bash <(curl -s https://raw.githubusercontent.com/...)
+#  Run from inside the repo:
+#    bash scripts/quickstart.sh
 # ============================================================
 
 # ── Detect Python 3.11+ (try versioned commands first for macOS) ──
@@ -28,8 +27,7 @@ done
 if [ -z "$PY" ]; then
     echo "ERROR: Python 3.11+ is required but not found."
     echo ""
-    echo "  Your system Python is too old. Install a newer version:"
-    echo ""
+    echo "  Install a newer version:"
     echo "  macOS (Homebrew):  brew install python@3.12"
     echo "  Ubuntu/Debian:     sudo apt install python3.12"
     echo "  Or use pyenv:      pyenv install 3.12.0"
@@ -37,26 +35,21 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
-echo "  Detected: $PY ($($PY --version 2>&1))"
-
 echo "============================================================"
 echo "  Hypergraph Context Graph - Quickstart"
-echo "  Using: $PY"
+echo "  Using: $PY ($($PY --version 2>&1))"
 echo "============================================================"
 echo ""
 
 # ── Step 1: Get into the repo directory ────────────────────────
-echo "[1/6] Getting latest code..."
+echo "[1/7] Getting latest code..."
 if [ -f "pyproject.toml" ] && grep -q "hypergraph-context-graph" pyproject.toml 2>/dev/null; then
-    # Already inside the repo
     echo "  Already in repo directory, pulling latest..."
     git pull origin claude/review-docs-start-build-Ceu1x || true
 elif [ -d "Hypergraph-for-Context-Graph" ]; then
-    # Repo exists as subdirectory
     cd Hypergraph-for-Context-Graph
     git pull origin claude/review-docs-start-build-Ceu1x
 else
-    # Fresh clone
     git clone https://github.com/vibhavjoshi123/Hypergraph-for-Context-Graph.git
     cd Hypergraph-for-Context-Graph
     git checkout claude/review-docs-start-build-Ceu1x
@@ -64,24 +57,34 @@ fi
 echo "  Done."
 echo ""
 
-# ── Step 2: Upgrade pip + install dependencies ─────────────────
-echo "[2/6] Installing dependencies..."
-echo "  Upgrading pip first..."
-$PY -m pip install --upgrade pip --quiet 2>/dev/null || true
-echo "  Installing project dependencies..."
-$PY -m pip install -e ".[dev]" --quiet
+# ── Step 2: Create virtual environment ─────────────────────────
+echo "[2/7] Setting up virtual environment..."
+if [ -d ".venv" ] && [ -f ".venv/bin/python" ]; then
+    echo "  .venv already exists, activating..."
+else
+    echo "  Creating .venv with $PY..."
+    $PY -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+echo "  Activated: $(python --version) at $(which python)"
+echo ""
+
+# ── Step 3: Install dependencies ──────────────────────────────
+echo "[3/7] Installing dependencies..."
+pip install --upgrade pip --quiet
+pip install -e ".[dev]" --quiet
 echo "  Done."
 echo ""
 
-# ── Step 3: Create .env file ──────────────────────────────────
-echo "[3/6] Configuring environment..."
+# ── Step 4: Create .env file ──────────────────────────────────
+echo "[4/7] Configuring environment..."
 if [ -f .env ]; then
     echo "  .env already exists, skipping."
 else
-    echo "  Creating .env file — you'll need to fill in your keys."
+    echo "  Creating .env file — fill in your keys below."
     echo ""
 
-    # Prompt for values
     read -rp "  TypeDB Cloud address [https://rv7ii3-0.cluster.typedb.com:80]: " TYPEDB_ADDR
     TYPEDB_ADDR=${TYPEDB_ADDR:-https://rv7ii3-0.cluster.typedb.com:80}
 
@@ -122,24 +125,19 @@ ENVEOF
 fi
 echo ""
 
-# ── Step 4: Run linter ────────────────────────────────────────
-echo "[4/6] Running linter..."
-if command -v ruff &>/dev/null; then
-    ruff check src/ tests/
-else
-    $PY -m pip install ruff --quiet
-    ruff check src/ tests/
-fi
+# ── Step 5: Run linter ────────────────────────────────────────
+echo "[5/7] Running linter..."
+ruff check src/ tests/
 echo "  Done."
 echo ""
 
-# ── Step 5: Setup TypeDB (create DB, load schema, seed data) ──
-echo "[5/6] Setting up TypeDB (schema + seed data)..."
-$PY scripts/setup_typedb.py --seed
+# ── Step 6: Setup TypeDB (create DB, load schema, seed data) ──
+echo "[6/7] Setting up TypeDB (schema + seed data)..."
+python scripts/setup_typedb.py --seed
 echo ""
 
-# ── Step 6: Start API server ──────────────────────────────────
-echo "[6/6] Starting API server on http://localhost:8000 ..."
+# ── Step 7: Start API server ──────────────────────────────────
+echo "[7/7] Starting API server on http://localhost:8000 ..."
 echo ""
 echo "  Try these endpoints:"
 echo "    curl http://localhost:8000/health"
@@ -152,4 +150,4 @@ echo "  Press Ctrl+C to stop the server."
 echo "============================================================"
 echo ""
 
-$PY -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
