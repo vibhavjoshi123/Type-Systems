@@ -7,8 +7,28 @@ set -e
 #  and starts the API server.
 # ============================================================
 
+# ── Detect python/pip commands (macOS uses python3/pip3) ───────
+if command -v python3 &>/dev/null; then
+    PY=python3
+elif command -v python &>/dev/null; then
+    PY=python
+else
+    echo "ERROR: Python not found. Install Python 3.11+ first."
+    exit 1
+fi
+
+if command -v pip3 &>/dev/null; then
+    PIP=pip3
+elif command -v pip &>/dev/null; then
+    PIP=pip
+else
+    echo "ERROR: pip not found. Install pip first."
+    exit 1
+fi
+
 echo "============================================================"
 echo "  Hypergraph Context Graph - Quickstart"
+echo "  Using: $PY, $PIP"
 echo "============================================================"
 echo ""
 
@@ -27,7 +47,7 @@ echo ""
 
 # ── Step 2: Install dependencies ──────────────────────────────
 echo "[2/6] Installing dependencies..."
-pip install -e ".[dev]" --quiet
+$PIP install -e ".[dev]" --quiet
 echo "  Done."
 echo ""
 
@@ -82,13 +102,13 @@ echo ""
 
 # ── Step 4: Run linter ────────────────────────────────────────
 echo "[4/6] Running linter..."
-ruff check src/ tests/ || { pip install ruff --quiet && ruff check src/ tests/; }
+ruff check src/ tests/ || { $PIP install ruff --quiet && ruff check src/ tests/; }
 echo "  Done."
 echo ""
 
 # ── Step 5: Setup TypeDB (create DB, load schema, seed data) ──
 echo "[5/6] Setting up TypeDB (schema + seed data)..."
-python scripts/setup_typedb.py --seed
+$PY scripts/setup_typedb.py --seed
 echo ""
 
 # ── Step 6: Start API server ──────────────────────────────────
@@ -105,4 +125,4 @@ echo "  Press Ctrl+C to stop the server."
 echo "============================================================"
 echo ""
 
-python -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+$PY -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
