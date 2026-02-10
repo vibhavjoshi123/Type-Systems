@@ -11,28 +11,37 @@ set -e
 #    bash <(curl -s https://raw.githubusercontent.com/...)
 # ============================================================
 
-# ── Detect python/pip commands (macOS uses python3/pip3) ───────
-if command -v python3 &>/dev/null; then
-    PY=python3
-elif command -v python &>/dev/null; then
-    PY=python
-else
-    echo "ERROR: Python not found. Install Python 3.11+ first."
+# ── Detect Python 3.11+ (try versioned commands first for macOS) ──
+PY=""
+for candidate in python3.13 python3.12 python3.11 python3 python; do
+    if command -v "$candidate" &>/dev/null; then
+        ver=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+        major=$(echo "$ver" | cut -d. -f1)
+        minor=$(echo "$ver" | cut -d. -f2)
+        if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
+            PY="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PY" ]; then
+    echo "ERROR: Python 3.11+ is required but not found."
+    echo ""
+    echo "  Your system Python is too old. Install a newer version:"
+    echo ""
+    echo "  macOS (Homebrew):  brew install python@3.12"
+    echo "  Ubuntu/Debian:     sudo apt install python3.12"
+    echo "  Or use pyenv:      pyenv install 3.12.0"
+    echo ""
     exit 1
 fi
 
-if command -v pip3 &>/dev/null; then
-    PIP=pip3
-elif command -v pip &>/dev/null; then
-    PIP=pip
-else
-    echo "ERROR: pip not found. Install pip first."
-    exit 1
-fi
+echo "  Detected: $PY ($($PY --version 2>&1))"
 
 echo "============================================================"
 echo "  Hypergraph Context Graph - Quickstart"
-echo "  Using: $PY, $PIP"
+echo "  Using: $PY"
 echo "============================================================"
 echo ""
 
@@ -58,7 +67,7 @@ echo ""
 # ── Step 2: Upgrade pip + install dependencies ─────────────────
 echo "[2/6] Installing dependencies..."
 echo "  Upgrading pip first..."
-$PY -m pip install --upgrade pip --quiet 2>/dev/null || $PIP install --upgrade pip --quiet
+$PY -m pip install --upgrade pip --quiet 2>/dev/null || true
 echo "  Installing project dependencies..."
 $PY -m pip install -e ".[dev]" --quiet
 echo "  Done."
