@@ -19,6 +19,7 @@ class TestHealthCheck:
         data = response.json()
         assert data["status"] == "healthy"
         assert data["version"] == "0.1.0"
+        assert "typedb_connected" in data
 
 
 class TestQueryEndpoint:
@@ -30,7 +31,7 @@ class TestQueryEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "answer" in data
-        assert "Acme" in data["answer"] or "Query received" in data["answer"]
+        assert "paths_found" in data
 
     def test_query_empty(self, client):
         response = client.post(
@@ -53,6 +54,18 @@ class TestEntityEndpoints:
         assert response.status_code == 201
         data = response.json()
         assert data["entity_id"] == "cust_001"
+
+    def test_get_entity_no_db(self, client):
+        response = client.get("/api/v1/entities/cust_001")
+        assert response.status_code == 503
+
+    def test_list_entities_no_db(self, client):
+        response = client.get("/api/v1/entities")
+        assert response.status_code == 503
+
+    def test_delete_entity_no_db(self, client):
+        response = client.delete("/api/v1/entities/cust_001")
+        assert response.status_code == 503
 
 
 class TestHyperedgeEndpoints:
@@ -85,3 +98,14 @@ class TestHyperedgeEndpoints:
             },
         )
         assert response.status_code == 422  # needs at least 2 participants
+
+    def test_get_hyperedges_no_db(self, client):
+        response = client.get("/api/v1/hyperedges/cust_001")
+        assert response.status_code == 503
+
+    def test_s_adjacent_no_db(self, client):
+        response = client.post(
+            "/api/v1/hyperedges/s-adjacent",
+            json={"entity_id": "cust_001", "s": 2},
+        )
+        assert response.status_code == 503

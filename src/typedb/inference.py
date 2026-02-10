@@ -1,8 +1,8 @@
-"""TypeDB inference rule management.
+"""TypeDB 3.x function management (replaces 2.x inference rules).
 
-Defines and manages inference rules that derive new relationships
-from existing data in the hypergraph. TypeDB's built-in reasoning
-engine evaluates these rules at query time.
+In TypeDB 3.x, rules are replaced by functions that must be explicitly
+invoked in queries. Functions use the 'fun' keyword and return streams
+or single values.
 
 From ARCHITECTURE_PLAN.md Phase 1 Task: typedb_inference.py (P2).
 """
@@ -18,78 +18,98 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class InferenceRule:
-    """A TypeQL inference rule definition."""
+class TypeDBFunction:
+    """A TypeDB 3.x function definition (replaces 2.x InferenceRule)."""
 
     name: str
-    when: str
-    then: str
+    signature: str
+    body: str
     description: str = ""
 
     def to_typeql(self) -> str:
-        """Convert to a TypeQL rule definition."""
-        return f"rule {self.name}: when {{{self.when}}} then {{{self.then}}};"
+        """Convert to a TypeQL function definition."""
+        return f"define\nfun {self.name}{self.signature}:\n{self.body}"
 
 
-# Built-in inference rules from the schema
-BUILT_IN_RULES: list[InferenceRule] = [
-    InferenceRule(
-        name="customer-at-risk",
-        when='$c isa customer, has health-score $hs; $hs < 70.0;',
-        then='$c has tier "at-risk";',
-        description="Flag customers with health score below 70 as at-risk.",
+# Built-in functions (replaces BUILT_IN_RULES)
+BUILT_IN_FUNCTIONS: list[TypeDBFunction] = [
+    TypeDBFunction(
+        name="customers_at_risk",
+        signature="() -> { customer }",
+        body=(
+            "    match\n"
+            "        $c isa customer, has health-score $hs;\n"
+            "        $hs < 70.0;\n"
+            "    return { $c };"
+        ),
+        description="Find customers with health score below 70 (at-risk).",
     ),
 ]
 
 
-class InferenceManager:
-    """Manage TypeDB inference rules for the hypergraph.
+# Backward compatibility aliases
+InferenceRule = TypeDBFunction
+BUILT_IN_RULES = BUILT_IN_FUNCTIONS
 
-    Rules are defined in TypeQL and loaded into the schema session.
-    TypeDB evaluates them at query time using its built-in reasoning engine.
+
+class InferenceManager:
+    """Manage TypeDB 3.x functions for the hypergraph.
+
+    In TypeDB 3.x, functions replace rules. Functions are defined in schema
+    transactions and explicitly invoked using the 'in' keyword in match queries.
     """
 
     def __init__(self, client: TypeDBClient) -> None:
         self.client = client
-        self._rules: dict[str, InferenceRule] = {
-            r.name: r for r in BUILT_IN_RULES
+        self._functions: dict[str, TypeDBFunction] = {
+            f.name: f for f in BUILT_IN_FUNCTIONS
         }
 
     @property
-    def rules(self) -> dict[str, InferenceRule]:
-        """All registered inference rules."""
-        return dict(self._rules)
+    def rules(self) -> dict[str, TypeDBFunction]:
+        """All registered functions (backward-compatible property name)."""
+        return dict(self._functions)
 
-    def register_rule(self, rule: InferenceRule) -> None:
-        """Register a new inference rule."""
-        self._rules[rule.name] = rule
-        logger.info("Registered inference rule: %s", rule.name)
+    @property
+    def functions(self) -> dict[str, TypeDBFunction]:
+        """All registered TypeDB functions."""
+        return dict(self._functions)
 
-    def unregister_rule(self, name: str) -> InferenceRule | None:
-        """Remove a registered rule by name."""
-        rule = self._rules.pop(name, None)
-        if rule:
-            logger.info("Unregistered inference rule: %s", name)
-        return rule
+    def register_rule(self, rule: TypeDBFunction) -> None:
+        """Register a new function (backward-compatible method name)."""
+        self._functions[rule.name] = rule
+        logger.info("Registered function: %s", rule.name)
+
+    def register_function(self, func: TypeDBFunction) -> None:
+        """Register a new TypeDB function."""
+        self._functions[func.name] = func
+        logger.info("Registered function: %s", func.name)
+
+    def unregister_rule(self, name: str) -> TypeDBFunction | None:
+        """Remove a registered function by name."""
+        func = self._functions.pop(name, None)
+        if func:
+            logger.info("Unregistered function: %s", name)
+        return func
 
     async def load_rules(self) -> int:
-        """Load all registered rules into the TypeDB schema.
+        """Load all registered functions into the TypeDB schema.
 
-        Returns the number of rules loaded.
+        Returns the number of functions loaded.
         """
         if not self.client.is_connected:
-            logger.warning("TypeDB not connected; skipping rule loading")
+            logger.warning("TypeDB not connected; skipping function loading")
             return 0
 
         loaded = 0
-        for rule in self._rules.values():
-            typeql = rule.to_typeql()
+        for func in self._functions.values():
+            typeql = func.to_typeql()
             try:
                 await self.client.load_schema(typeql)
                 loaded += 1
-                logger.info("Loaded rule: %s", rule.name)
+                logger.info("Loaded function: %s", func.name)
             except Exception:
-                logger.exception("Failed to load rule: %s", rule.name)
+                logger.exception("Failed to load function: %s", func.name)
 
         return loaded
 
@@ -99,25 +119,17 @@ class InferenceManager:
         *,
         inference: bool = True,
     ) -> list[dict]:
-        """Execute a query with inference enabled or disabled.
+        """Execute a query (functions are invoked explicitly in 3.x).
 
-        When inference is True, TypeDB's reasoning engine evaluates
-        all applicable rules during query execution.
+        In TypeDB 3.x, there is no inference toggle. Functions are called
+        explicitly within match clauses using the 'in' keyword.
         """
-        if not inference:
-            return await self.client.query(typeql)
-
-        # TypeDB enables inference at the transaction level
-        # The client.query method uses standard transactions;
-        # for inference-enabled queries, the driver transaction
-        # must be opened with inference=True.
-        # Fallback to standard query if driver unavailable.
         return await self.client.query(typeql)
 
-    def get_rule(self, name: str) -> InferenceRule | None:
-        """Get a rule by name."""
-        return self._rules.get(name)
+    def get_rule(self, name: str) -> TypeDBFunction | None:
+        """Get a function by name."""
+        return self._functions.get(name)
 
-    def list_rules(self) -> list[InferenceRule]:
-        """List all registered rules."""
-        return list(self._rules.values())
+    def list_rules(self) -> list[TypeDBFunction]:
+        """List all registered functions."""
+        return list(self._functions.values())

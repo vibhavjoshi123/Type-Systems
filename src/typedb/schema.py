@@ -1,12 +1,17 @@
-"""TypeDB schema definitions for the hypergraph context graph.
+"""TypeDB 3.x schema definitions for the hypergraph context graph.
 
-The schema maps directly to the PERA model described in the TypeDB vs RDF/OWL PDF:
+The schema maps directly to the PERA model:
 - Entities are first-class with typed attributes
 - Relations (hyperedges) natively connect N entities through typed roles
 - Nested relations implement 2-morphisms (meta-relations between decisions)
 - Closed World Assumption enforces policy compliance
 
-Schema structure from ARCHITECTURE_PLAN.md Section 1.2.
+TypeDB 3.x syntax changes from 2.x:
+- 'entity X' keyword instead of 'X sub entity'
+- 'attribute X, value string' instead of 'X sub attribute, value string'
+- 'relation X' instead of 'X sub relation'
+- Explicit @card annotations (default owns is 0..1 in 3.x)
+- Rules replaced by functions (explicit invocation)
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Complete TypeQL schema for the enterprise hypergraph context graph
+# Complete TypeQL 3.x schema for the enterprise hypergraph context graph
 SCHEMA_TYPEQL = """
 define
 
@@ -69,44 +74,44 @@ entity enterprise-entity @abstract,
     plays decision-event:decision-maker,
     plays decision-event:affected-entity;
 
-entity customer sub enterprise-entity,
+entity customer, sub enterprise-entity,
     owns health-score,
-    owns tier;
+    owns tier @card(0..);
 
-entity employee sub enterprise-entity,
+entity employee, sub enterprise-entity,
     owns department,
     owns role,
     owns title;
 
-entity deal sub enterprise-entity,
+entity deal, sub enterprise-entity,
     owns deal-value,
     owns discount-percentage,
     owns stage;
 
-entity ticket sub enterprise-entity,
+entity ticket, sub enterprise-entity,
     owns severity,
     owns status,
     owns priority;
 
-entity policy sub enterprise-entity,
+entity policy, sub enterprise-entity,
     owns policy-type,
     owns max-discount,
     owns effective-date;
 
-entity metric sub enterprise-entity,
+entity metric, sub enterprise-entity,
     owns metric-value,
     owns metric-type;
 
 # ============ RELATIONS (HYPEREDGES) ============
 # Core hyperedge relation - connects N entities
 relation context-hyperedge,
-    relates participant,
+    relates participant @card(1..),
     owns timestamp,
     owns confidence-score,
     owns source-system;
 
 # Decision event hyperedge - the key structure
-relation decision-event sub context-hyperedge,
+relation decision-event, sub context-hyperedge,
     relates involved-entity as participant,
     relates decision-maker as participant,
     relates affected-entity as participant,
@@ -119,14 +124,13 @@ relation decision-event sub context-hyperedge,
     plays exception-override:exception-decision;
 
 # Specialized decision subtypes
-relation escalation sub decision-event;
-relation approval sub decision-event;
-relation renewal sub decision-event;
-relation incident-event sub decision-event;
+relation escalation, sub decision-event;
+relation approval, sub decision-event;
+relation renewal, sub decision-event;
+relation incident-event, sub decision-event;
 
 # ============ 2-MORPHISMS (META-RELATIONS) ============
 # Relationship between decisions (nested relations)
-# From Higher-Order Reasoning PDF: morphisms between morphisms
 relation precedent-chain,
     relates precedent-decision,
     relates derived-decision,
@@ -135,21 +139,22 @@ relation precedent-chain,
     owns timestamp;
 
 # Exception override: catalyst-approver isomorphism
-# From Chemical Reaction Networks PDF Section 3
 relation exception-override,
     relates base-decision,
     relates exception-decision,
     owns override-rationale,
     owns timestamp;
+"""
 
-# ============ INFERENCE RULES ============
-rule customer-at-risk:
-    when {
+# TypeDB 3.x functions replacing old inference rules.
+# Functions are explicitly invoked in queries (unlike 2.x rules which were implicit).
+FUNCTIONS_TYPEQL = """
+define
+fun customers_at_risk() -> { customer }:
+    match
         $c isa customer, has health-score $hs;
         $hs < 70.0;
-    } then {
-        $c has tier "at-risk";
-    };
+    return { $c };
 """
 
 

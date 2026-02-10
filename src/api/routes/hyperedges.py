@@ -1,13 +1,18 @@
-"""Hyperedge CRUD endpoints."""
+"""Hyperedge CRUD endpoints.
+
+Wired to TypeDB operations when a database connection is available.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from src.models.hyperedges import RelationType
+from src.models.hyperedges import DecisionEvent, Hyperedge, RelationType, RoleAssignment
+from src.typedb.client import TypeDBClient
+from src.typedb.operations import HypergraphOperations
 
 router = APIRouter()
 
@@ -40,13 +45,44 @@ class HyperedgeResponse(BaseModel):
     rationale: str | None = None
 
 
-@router.post("/hyperedges", response_model=HyperedgeResponse, status_code=201)
-async def create_hyperedge(request: HyperedgeCreate) -> HyperedgeResponse:
-    """Create a new hyperedge connecting multiple entities.
+def _get_db(request: Request) -> TypeDBClient | None:
+    """Get the TypeDB client from app state, or None."""
+    db = getattr(request.app.state, "db", None)
+    if db and db.is_connected:
+        return db
+    return None
 
-    This is the core operation: creating an n-ary relation (hyperedge)
-    that connects 2+ entities with typed roles.
-    """
+
+@router.post("/hyperedges", response_model=HyperedgeResponse, status_code=201)
+async def create_hyperedge(
+    request: HyperedgeCreate, req: Request
+) -> HyperedgeResponse:
+    """Create a new hyperedge connecting multiple entities."""
+    db = _get_db(req)
+    if db:
+        roles = [
+            RoleAssignment(entity_id=p.entity_id, role=p.role)
+            for p in request.participants
+        ]
+        if request.decision_type or request.rationale:
+            hyperedge: Hyperedge = DecisionEvent(
+                hyperedge_id=request.hyperedge_id,
+                relation_type=request.relation_type,
+                participants=roles,
+                decision_type=request.decision_type,
+                rationale=request.rationale,
+                source_system=request.source_system,
+            )
+        else:
+            hyperedge = Hyperedge(
+                hyperedge_id=request.hyperedge_id,
+                relation_type=request.relation_type,
+                participants=roles,
+                source_system=request.source_system,
+            )
+        ops = HypergraphOperations(db)
+        await ops.insert_hyperedge(hyperedge)
+
     return HyperedgeResponse(
         hyperedge_id=request.hyperedge_id,
         relation_type=request.relation_type,
@@ -57,12 +93,31 @@ async def create_hyperedge(request: HyperedgeCreate) -> HyperedgeResponse:
 
 
 @router.get("/hyperedges/{entity_id}", response_model=list[HyperedgeResponse])
-async def get_hyperedges_for_entity(entity_id: str) -> list[HyperedgeResponse]:
+async def get_hyperedges_for_entity(
+    entity_id: str, req: Request
+) -> list[HyperedgeResponse]:
     """Get all hyperedges involving an entity."""
-    raise HTTPException(
-        status_code=501,
-        detail="TypeDB backend required. Configure TYPEDB_HOST and TYPEDB_PORT.",
-    )
+    db = _get_db(req)
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="TypeDB not connected. Configure TYPEDB_HOST and TYPEDB_PORT.",
+        )
+
+    ops = HypergraphOperations(db)
+    results = await ops.get_hyperedges_for_entity(entity_id)
+
+    hyperedges: list[HyperedgeResponse] = []
+    for result in results:
+        attrs = result.get("h", {})
+        hyperedges.append(
+            HyperedgeResponse(
+                hyperedge_id=attrs.get("hyperedge-id", ""),
+                relation_type=attrs.get("relation-type", RelationType.CONTEXT),
+                participants=[],
+            )
+        )
+    return hyperedges
 
 
 class SAdjacencyRequest(BaseModel):
@@ -73,12 +128,19 @@ class SAdjacencyRequest(BaseModel):
 
 
 @router.post("/hyperedges/s-adjacent", response_model=list[dict[str, Any]])
-async def find_s_adjacent(request: SAdjacencyRequest) -> list[dict[str, Any]]:
+async def find_s_adjacent(
+    request: SAdjacencyRequest, req: Request
+) -> list[dict[str, Any]]:
     """Find hyperedges that are s-adjacent (share >= s entities).
 
-    IS >= 2 reduces noise by 87% per the MIT paper.
+    IS >= 2 reduces noise by 87%.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="TypeDB backend required. Configure TYPEDB_HOST and TYPEDB_PORT.",
-    )
+    db = _get_db(req)
+    if not db:
+        raise HTTPException(
+            status_code=503,
+            detail="TypeDB not connected. Configure TYPEDB_HOST and TYPEDB_PORT.",
+        )
+
+    ops = HypergraphOperations(db)
+    return await ops.find_s_adjacent_hyperedges(request.entity_id, request.s)

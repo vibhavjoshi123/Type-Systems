@@ -22,8 +22,8 @@ classifiers = [
 ]
 
 dependencies = [
-    # TypeDB
-    "typedb-driver>=2.28.0",
+    # TypeDB 3.x
+    "typedb-driver>=3.0.0",
     
     # LLM Providers
     "anthropic>=0.39.0",

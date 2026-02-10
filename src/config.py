@@ -7,17 +7,26 @@ from pydantic_settings import BaseSettings
 
 
 class TypeDBSettings(BaseSettings):
-    """TypeDB connection settings."""
+    """TypeDB 3.x connection settings (supports Core and Cloud)."""
 
-    host: str = Field(default="localhost", alias="TYPEDB_HOST")
-    port: int = Field(default=1729, alias="TYPEDB_PORT")
+    address: str = Field(
+        default="localhost:1729",
+        alias="TYPEDB_ADDRESS",
+        description="TypeDB server address (host:port or cloud URL)",
+    )
     database: str = Field(default="context_graph", alias="TYPEDB_DATABASE")
-    username: str | None = Field(default=None, alias="TYPEDB_USERNAME")
-    password: str | None = Field(default=None, alias="TYPEDB_PASSWORD")
-
-    @property
-    def address(self) -> str:
-        return f"{self.host}:{self.port}"
+    username: str = Field(default="admin", alias="TYPEDB_USERNAME")
+    password: str = Field(default="password", alias="TYPEDB_PASSWORD")
+    tls_enabled: bool = Field(
+        default=False,
+        alias="TYPEDB_TLS_ENABLED",
+        description="Enable TLS (required for TypeDB Cloud)",
+    )
+    tls_root_ca: str | None = Field(
+        default=None,
+        alias="TYPEDB_TLS_ROOT_CA",
+        description="Path to TLS root CA certificate",
+    )
 
     model_config = {"env_prefix": "TYPEDB_", "extra": "ignore"}
 
@@ -54,6 +63,10 @@ class APISettings(BaseSettings):
     port: int = Field(default=8000, alias="API_PORT")
     debug: bool = Field(default=False, alias="API_DEBUG")
     cors_origins: list[str] = Field(default=["*"], alias="API_CORS_ORIGINS")
+    api_key: str | None = Field(default=None, alias="API_KEY")
+    rate_limit_rpm: int = Field(default=120, alias="API_RATE_LIMIT_RPM")
+    log_format: str = Field(default="text", alias="LOG_FORMAT")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     model_config = {"env_prefix": "API_", "extra": "ignore"}
 

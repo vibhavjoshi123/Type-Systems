@@ -1,61 +1,79 @@
-"""Tests for TypeDB inference rule management."""
+"""Tests for TypeDB 3.x function management (replaces 2.x inference rules)."""
 
-from src.typedb.inference import BUILT_IN_RULES, InferenceManager, InferenceRule
+from src.typedb.inference import (
+    BUILT_IN_FUNCTIONS,
+    BUILT_IN_RULES,
+    InferenceManager,
+    InferenceRule,
+    TypeDBFunction,
+)
 
 
-class TestInferenceRule:
+class TestTypeDBFunction:
     def test_to_typeql(self):
-        rule = InferenceRule(
-            name="test-rule",
-            when='$x isa customer, has health-score $hs; $hs < 50.0;',
-            then='$x has tier "critical";',
+        func = TypeDBFunction(
+            name="test_func",
+            signature="($x: customer) -> { deal }",
+            body=(
+                "    match\n"
+                "        ($x, $d) isa context-hyperedge;\n"
+                "        $d isa deal;\n"
+                "    return { $d };"
+            ),
         )
-        typeql = rule.to_typeql()
-        assert "rule test-rule:" in typeql
-        assert "when" in typeql
-        assert "then" in typeql
+        typeql = func.to_typeql()
+        assert "fun test_func" in typeql
+        assert "define" in typeql
+        assert "match" in typeql
+        assert "return" in typeql
 
-    def test_built_in_rules(self):
-        assert len(BUILT_IN_RULES) >= 1
-        assert BUILT_IN_RULES[0].name == "customer-at-risk"
+    def test_built_in_functions(self):
+        assert len(BUILT_IN_FUNCTIONS) >= 1
+        assert BUILT_IN_FUNCTIONS[0].name == "customers_at_risk"
+
+    def test_backward_compat_aliases(self):
+        """InferenceRule and BUILT_IN_RULES are aliases for 3.x types."""
+        assert InferenceRule is TypeDBFunction
+        assert BUILT_IN_RULES is BUILT_IN_FUNCTIONS
 
 
 class TestInferenceManager:
-    def test_register_rule(self):
+    def test_register_function(self):
         class MockClient:
             is_connected = False
 
         mgr = InferenceManager(MockClient())
-        rule = InferenceRule(
-            name="new-rule",
-            when='$d isa deal, has deal-value $v; $v > 500000.0;',
-            then='$d has stage "review";',
+        func = TypeDBFunction(
+            name="new_func",
+            signature="() -> { deal }",
+            body="    match $d isa deal, has deal-value $v; $v > 500000.0;\n    return { $d };",
         )
-        mgr.register_rule(rule)
-        assert "new-rule" in mgr.rules
+        mgr.register_rule(func)
+        assert "new_func" in mgr.rules
+        assert "new_func" in mgr.functions
 
-    def test_unregister_rule(self):
+    def test_unregister_function(self):
         class MockClient:
             is_connected = False
 
         mgr = InferenceManager(MockClient())
-        removed = mgr.unregister_rule("customer-at-risk")
+        removed = mgr.unregister_rule("customers_at_risk")
         assert removed is not None
-        assert "customer-at-risk" not in mgr.rules
+        assert "customers_at_risk" not in mgr.rules
 
-    def test_get_rule(self):
+    def test_get_function(self):
         class MockClient:
             is_connected = False
 
         mgr = InferenceManager(MockClient())
-        rule = mgr.get_rule("customer-at-risk")
-        assert rule is not None
-        assert rule.name == "customer-at-risk"
+        func = mgr.get_rule("customers_at_risk")
+        assert func is not None
+        assert func.name == "customers_at_risk"
 
-    def test_list_rules(self):
+    def test_list_functions(self):
         class MockClient:
             is_connected = False
 
         mgr = InferenceManager(MockClient())
-        rules = mgr.list_rules()
-        assert len(rules) >= 1
+        funcs = mgr.list_rules()
+        assert len(funcs) >= 1

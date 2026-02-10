@@ -18,8 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import get_settings
 from src.models.entities import Customer, Deal, Employee, Policy, Ticket
-from src.models.hyperedges import DecisionEvent, RelationType, RoleAssignment
-from src.models.decisions import PrecedentChain, TwoMorphismType
+from src.models.hyperedges import DecisionEvent, RoleAssignment
 from src.typedb.client import TypeDBClient
 from src.typedb.operations import HypergraphOperations
 

@@ -4,7 +4,7 @@ from src.typedb.client import TypeDBClient
 from src.typedb.embeddings import EmbeddingStore
 from src.typedb.inference import InferenceManager
 from src.typedb.operations import HypergraphOperations
-from src.typedb.schema import SCHEMA_TYPEQL, SchemaManager
+from src.typedb.schema import FUNCTIONS_TYPEQL, SCHEMA_TYPEQL, SchemaManager
 from src.typedb.traversal import HypergraphTraversal
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "HypergraphOperations",
     "InferenceManager",
     "SchemaManager",
+    "FUNCTIONS_TYPEQL",
     "SCHEMA_TYPEQL",
     "HypergraphTraversal",
 ]
