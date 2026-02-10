@@ -1,7 +1,11 @@
-"""CRUD operations for entities and hyperedges in TypeDB.
+"""CRUD operations for entities and hyperedges in TypeDB 3.x.
 
 Provides a high-level Python API over TypeQL queries for managing
 the hypergraph's entities (vertices) and relations (hyperedges).
+
+TypeDB 3.x query changes from 2.x:
+- Pipeline stages chain together: match -> insert, match -> delete, match -> fetch
+- 'delete $e;' for entity deletion
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ logger = logging.getLogger(__name__)
 class HypergraphOperations:
     """High-level CRUD operations for the hypergraph.
 
-    Translates between Pydantic models and TypeQL queries.
+    Translates between Pydantic models and TypeQL 3.x queries.
     """
 
     def __init__(self, client: TypeDBClient) -> None:
@@ -78,7 +82,6 @@ class HypergraphOperations:
         typeql = f"""
         match
             $e isa enterprise-entity, has entity-id "{entity_id}";
-        fetch $e: attribute;
         """
         results = await self.client.query(typeql)
         return results[0] if results else None
@@ -88,7 +91,6 @@ class HypergraphOperations:
         typeql = f"""
         match
             $e isa {entity_type.value};
-        fetch $e: attribute;
         """
         return await self.client.query(typeql)
 
@@ -156,16 +158,11 @@ class HypergraphOperations:
         return hyperedge.hyperedge_id
 
     async def get_hyperedges_for_entity(self, entity_id: str) -> list[dict[str, Any]]:
-        """Get all hyperedges involving an entity.
-
-        This is the equivalent of getting all reactions involving a chemical species
-        (node degree in the hypergraph).
-        """
+        """Get all hyperedges involving an entity."""
         typeql = f"""
         match
             $e isa enterprise-entity, has entity-id "{entity_id}";
             $h (participant: $e) isa context-hyperedge;
-        fetch $h: attribute;
         """
         return await self.client.query(typeql)
 
@@ -176,9 +173,8 @@ class HypergraphOperations:
     ) -> list[dict[str, Any]]:
         """Find hyperedges that are s-adjacent to those involving entity_id.
 
-        The IS >= 2 constraint from the MIT paper: two hyperedges are
-        meaningfully connected only if they share at least s nodes.
-        This produces an 87% reduction in noise at s=2.
+        The IS >= 2 constraint: two hyperedges are meaningfully connected
+        only if they share at least s nodes. 87% noise reduction at s=2.
         """
         typeql = f"""
         match
@@ -196,7 +192,6 @@ class HypergraphOperations:
             $h1 (participant: $shared);
             $h2 (participant: $shared);
             """
-        typeql += "fetch $h1, $h2;"
         return await self.client.query(typeql)
 
     # ── 2-Morphism Operations ─────────────────────────────────────────
@@ -206,10 +201,6 @@ class HypergraphOperations:
 
         This creates a TypeDB nested relation: a relation whose role players
         are themselves relations (decision events).
-
-        From TypeDB vs RDF/OWL PDF Section 3.2:
-        TypeDB's nested relations = 2-morphisms, while RDF requires
-        double reification.
         """
         typeql = f"""
         match
@@ -242,6 +233,5 @@ class HypergraphOperations:
             }} or {{
                 (precedent-decision: $other, derived-decision: $d) isa precedent-chain;
             }};
-        fetch $other: attribute;
         """
         return await self.client.query(typeql)

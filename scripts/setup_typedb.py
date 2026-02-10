@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""TypeDB setup automation script.
+"""TypeDB 3.x setup automation script.
 
-Creates the database, loads the schema, and optionally seeds sample data.
+Creates the database, loads the schema and functions, and optionally seeds sample data.
 Run this once after deploying TypeDB to bootstrap the hypergraph.
+
+Supports both TypeDB Core (local) and TypeDB Cloud connections.
 
 Usage:
     python scripts/setup_typedb.py [--seed]
@@ -27,7 +29,7 @@ async def setup(seed: bool = False) -> None:
     from src.config import get_settings
     from src.typedb.client import TypeDBClient
     from src.typedb.inference import InferenceManager
-    from src.typedb.schema import SCHEMA_TYPEQL
+    from src.typedb.schema import FUNCTIONS_TYPEQL, SCHEMA_TYPEQL
 
     settings = get_settings()
     logger.info("Connecting to TypeDB at %s", settings.typedb.address)
@@ -36,14 +38,15 @@ async def setup(seed: bool = False) -> None:
         if not client.is_connected:
             logger.error(
                 "Could not connect to TypeDB at %s. "
-                "Ensure TypeDB is running (docker run -d --name typedb "
-                "-p 1729:1729 typedb/typedb:latest)",
+                "Ensure TypeDB is running. For local: "
+                "docker run -d --name typedb -p 1729:1729 typedb/typedb:latest "
+                "For Cloud: check TYPEDB_ADDRESS, TYPEDB_USERNAME, TYPEDB_PASSWORD",
                 settings.typedb.address,
             )
             sys.exit(1)
 
         # Step 1: Create database
-        logger.info("Step 1/4: Creating database '%s'...", settings.typedb.database)
+        logger.info("Step 1/5: Creating database '%s'...", settings.typedb.database)
         created = await client.ensure_database()
         if created:
             logger.info("Database created successfully")
@@ -51,23 +54,31 @@ async def setup(seed: bool = False) -> None:
             logger.info("Database already exists")
 
         # Step 2: Load schema
-        logger.info("Step 2/4: Loading TypeQL schema...")
+        logger.info("Step 2/5: Loading TypeQL 3.x schema...")
         await client.load_schema(SCHEMA_TYPEQL)
         logger.info("Schema loaded successfully")
 
-        # Step 3: Load inference rules
-        logger.info("Step 3/4: Loading inference rules...")
+        # Step 3: Load functions (replaces 2.x inference rules)
+        logger.info("Step 3/5: Loading TypeDB functions...")
+        try:
+            await client.load_schema(FUNCTIONS_TYPEQL)
+            logger.info("Functions loaded from schema definition")
+        except Exception:
+            logger.warning("Schema-level functions not loaded, trying via InferenceManager")
+
+        # Step 4: Load additional functions via manager
+        logger.info("Step 4/5: Loading additional functions via InferenceManager...")
         inference = InferenceManager(client)
         loaded = await inference.load_rules()
-        logger.info("Loaded %d inference rule(s)", loaded)
+        logger.info("Loaded %d function(s)", loaded)
 
-        # Step 4: Seed data (optional)
+        # Step 5: Seed data (optional)
         if seed:
-            logger.info("Step 4/4: Seeding sample data...")
+            logger.info("Step 5/5: Seeding sample data...")
             await _seed_data(client)
             logger.info("Sample data seeded successfully")
         else:
-            logger.info("Step 4/4: Skipping seed data (use --seed to enable)")
+            logger.info("Step 5/5: Skipping seed data (use --seed to enable)")
 
     logger.info("TypeDB setup complete!")
 

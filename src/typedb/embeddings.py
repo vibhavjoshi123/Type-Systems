@@ -1,4 +1,4 @@
-"""Vector embedding storage and retrieval for TypeDB entities.
+"""Vector embedding storage and retrieval for TypeDB 3.x entities.
 
 Stores embeddings as JSON-serialized strings in TypeDB attributes,
 and provides cosine similarity search for semantic entity matching.
@@ -34,7 +34,7 @@ class EmbeddingStore:
     """Store and retrieve vector embeddings for TypeDB entities.
 
     Embeddings are stored as JSON-serialized strings in the
-    `embedding` attribute of enterprise-entity instances.
+    `embedding-json` attribute of enterprise-entity instances.
     Similarity search is performed client-side after retrieval.
     """
 
@@ -52,7 +52,7 @@ class EmbeddingStore:
         match
             $e isa enterprise-entity, has entity-id "{entity_id}";
         insert
-            $e has embedding '{embedding_json}';
+            $e has embedding-json '{embedding_json}';
         """
         await self.client.write(typeql)
         logger.info(
@@ -64,13 +64,12 @@ class EmbeddingStore:
         typeql = f"""
         match
             $e isa enterprise-entity, has entity-id "{entity_id}",
-                has embedding $emb;
-        fetch $emb;
+                has embedding-json $emb;
         """
         results = await self.client.query(typeql)
         if not results:
             return None
-        emb_str = results[0].get("emb", {}).get("value", "")
+        emb_str = results[0].get("emb", "")
         if not emb_str:
             return None
         return json.loads(emb_str)
@@ -80,14 +79,13 @@ class EmbeddingStore:
         typeql = """
         match
             $e isa enterprise-entity, has entity-id $id,
-                has embedding $emb;
-        fetch $id; $emb;
+                has embedding-json $emb;
         """
         results = await self.client.query(typeql)
         embeddings: dict[str, list[float]] = {}
         for result in results:
-            eid = result.get("id", {}).get("value", "")
-            emb_str = result.get("emb", {}).get("value", "")
+            eid = result.get("id", "")
+            emb_str = result.get("emb", "")
             if eid and emb_str:
                 embeddings[eid] = json.loads(emb_str)
         return embeddings
@@ -134,12 +132,15 @@ class EmbeddingStore:
         ]
 
     async def delete_embedding(self, entity_id: str) -> None:
-        """Remove the embedding for an entity."""
+        """Remove the embedding for an entity.
+
+        TypeDB 3.x: uses 'delete attr of $entity;' syntax.
+        """
         typeql = f"""
         match
             $e isa enterprise-entity, has entity-id "{entity_id}",
-                has embedding $emb;
-        delete $e has $emb;
+                has embedding-json $emb;
+        delete embedding-json of $e;
         """
         await self.client.write(typeql)
         logger.info("Deleted embedding for entity %s", entity_id)
