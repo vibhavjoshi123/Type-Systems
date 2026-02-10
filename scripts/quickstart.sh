@@ -5,6 +5,10 @@ set -e
 #  Hypergraph Context Graph - Quickstart Script
 #  Pulls code, installs deps, configures env, sets up TypeDB,
 #  and starts the API server.
+#
+#  Run from anywhere:
+#    bash scripts/quickstart.sh        (if inside the repo)
+#    bash <(curl -s https://raw.githubusercontent.com/...)
 # ============================================================
 
 # ── Detect python/pip commands (macOS uses python3/pip3) ───────
@@ -32,12 +36,18 @@ echo "  Using: $PY, $PIP"
 echo "============================================================"
 echo ""
 
-# ── Step 1: Clone or pull latest code ──────────────────────────
+# ── Step 1: Get into the repo directory ────────────────────────
 echo "[1/6] Getting latest code..."
-if [ -d "Hypergraph-for-Context-Graph" ]; then
+if [ -f "pyproject.toml" ] && grep -q "hypergraph-context-graph" pyproject.toml 2>/dev/null; then
+    # Already inside the repo
+    echo "  Already in repo directory, pulling latest..."
+    git pull origin claude/review-docs-start-build-Ceu1x || true
+elif [ -d "Hypergraph-for-Context-Graph" ]; then
+    # Repo exists as subdirectory
     cd Hypergraph-for-Context-Graph
     git pull origin claude/review-docs-start-build-Ceu1x
 else
+    # Fresh clone
     git clone https://github.com/vibhavjoshi123/Hypergraph-for-Context-Graph.git
     cd Hypergraph-for-Context-Graph
     git checkout claude/review-docs-start-build-Ceu1x
@@ -45,9 +55,12 @@ fi
 echo "  Done."
 echo ""
 
-# ── Step 2: Install dependencies ──────────────────────────────
+# ── Step 2: Upgrade pip + install dependencies ─────────────────
 echo "[2/6] Installing dependencies..."
-$PIP install -e ".[dev]" --quiet
+echo "  Upgrading pip first..."
+$PY -m pip install --upgrade pip --quiet 2>/dev/null || $PIP install --upgrade pip --quiet
+echo "  Installing project dependencies..."
+$PY -m pip install -e ".[dev]" --quiet
 echo "  Done."
 echo ""
 
@@ -102,7 +115,12 @@ echo ""
 
 # ── Step 4: Run linter ────────────────────────────────────────
 echo "[4/6] Running linter..."
-ruff check src/ tests/ || { $PIP install ruff --quiet && ruff check src/ tests/; }
+if command -v ruff &>/dev/null; then
+    ruff check src/ tests/
+else
+    $PY -m pip install ruff --quiet
+    ruff check src/ tests/
+fi
 echo "  Done."
 echo ""
 
