@@ -13,11 +13,21 @@ TypeDB 3.x changes from 2.x:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from src.config import TypeDBSettings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_address(address: str) -> str:
+    """Normalize a TypeDB address to host:port format.
+
+    Strips http(s):// protocol prefixes since the TypeDB gRPC driver
+    controls TLS via DriverOptions, not the URL scheme.
+    """
+    return re.sub(r"^https?://", "", address).rstrip("/")
 
 
 class TypeDBClient:
@@ -46,9 +56,34 @@ class TypeDBClient:
                 opts_kwargs["tls_root_ca_path"] = self.settings.tls_root_ca
             opts = DriverOptions(**opts_kwargs)
 
-            self._driver = TypeDB.driver(self.settings.address, creds, opts)
-            self._connected = True
-            logger.info("Connected to TypeDB at %s", self.settings.address)
+            addr = _normalize_address(self.settings.address)
+            addresses = self._connection_candidates(addr)
+
+            last_error: Exception | None = None
+            for candidate in addresses:
+                try:
+                    logger.info("Trying TypeDB at %s ...", candidate)
+                    self._driver = TypeDB.driver(candidate, creds, opts)
+                    self._connected = True
+                    logger.info(
+                        "Connected to TypeDB at %s", candidate
+                    )
+                    return
+                except Exception as exc:
+                    logger.debug(
+                        "Could not connect to %s: %s", candidate, exc
+                    )
+                    last_error = exc
+
+            # All candidates failed
+            logger.error(
+                "Failed to connect to TypeDB. Tried: %s. "
+                "Last error: %s",
+                ", ".join(addresses),
+                last_error,
+            )
+            self._driver = None
+            self._connected = False
         except ImportError:
             logger.warning(
                 "typedb-driver not installed. Using in-memory fallback. "
@@ -56,10 +91,21 @@ class TypeDBClient:
             )
             self._driver = None
             self._connected = False
-        except Exception:
-            logger.exception("Failed to connect to TypeDB at %s", self.settings.address)
-            self._driver = None
-            self._connected = False
+
+    @staticmethod
+    def _connection_candidates(addr: str) -> list[str]:
+        """Build a list of addresses to try for connection.
+
+        TypeDB Cloud may expose gRPC on port 443 while the dashboard
+        shows port 80 (HTTP). This generates fallback candidates so
+        users don't have to guess the right port.
+        """
+        candidates = [addr]
+        # If the address uses port 80, also try 443 (common for
+        # Cloud gRPC behind TLS)
+        if addr.endswith(":80"):
+            candidates.append(addr.rsplit(":80", 1)[0] + ":443")
+        return candidates
 
     async def disconnect(self) -> None:
         """Close the TypeDB connection."""

@@ -37,11 +37,18 @@ async def setup(seed: bool = False) -> None:
     async with TypeDBClient(settings.typedb) as client:
         if not client.is_connected:
             logger.error(
-                "Could not connect to TypeDB at %s. "
-                "Ensure TypeDB is running. For local: "
-                "docker run -d --name typedb -p 1729:1729 typedb/typedb:latest "
-                "For Cloud: check TYPEDB_ADDRESS, TYPEDB_USERNAME, TYPEDB_PASSWORD",
+                "Could not connect to TypeDB at %s.",
                 settings.typedb.address,
+            )
+            logger.error(
+                "Troubleshooting:\n"
+                "  1. Check TYPEDB_ADDRESS in .env "
+                "(Cloud format: rv7ii3-0.cluster.typedb.com:443)\n"
+                "  2. Ensure TYPEDB_TLS_ENABLED=true for Cloud\n"
+                "  3. Verify TYPEDB_USERNAME and TYPEDB_PASSWORD\n"
+                "  4. For local: "
+                "docker run -d --name typedb -p 1729:1729 "
+                "typedb/typedb:latest"
             )
             sys.exit(1)
 

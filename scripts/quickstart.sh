@@ -85,8 +85,10 @@ else
     echo "  Creating .env file — fill in your keys below."
     echo ""
 
-    read -rp "  TypeDB Cloud address [https://rv7ii3-0.cluster.typedb.com:80]: " TYPEDB_ADDR
-    TYPEDB_ADDR=${TYPEDB_ADDR:-https://rv7ii3-0.cluster.typedb.com:80}
+    echo "  TypeDB address format: host:port (no https:// prefix)"
+    echo "  The driver handles TLS via TYPEDB_TLS_ENABLED setting."
+    read -rp "  TypeDB Cloud address [rv7ii3-0.cluster.typedb.com:443]: " TYPEDB_ADDR
+    TYPEDB_ADDR=${TYPEDB_ADDR:-rv7ii3-0.cluster.typedb.com:443}
 
     read -rp "  TypeDB username [admin]: " TYPEDB_USER
     TYPEDB_USER=${TYPEDB_USER:-admin}
