@@ -28,7 +28,12 @@ class TypeDBSettings(BaseSettings):
         description="Path to TLS root CA certificate",
     )
 
-    model_config = {"env_prefix": "TYPEDB_", "extra": "ignore"}
+    model_config = {
+        "env_prefix": "TYPEDB_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 class LLMSettings(BaseSettings):
@@ -41,7 +46,12 @@ class LLMSettings(BaseSettings):
     max_tokens: int = Field(default=4096, alias="LLM_MAX_TOKENS")
     temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
 
-    model_config = {"env_prefix": "LLM_", "extra": "ignore"}
+    model_config = {
+        "env_prefix": "LLM_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 class ConnectorSettings(BaseSettings):
@@ -53,7 +63,12 @@ class ConnectorSettings(BaseSettings):
     slack_bot_token: str | None = Field(default=None, alias="CONNECTOR_SLACK_BOT_TOKEN")
     pagerduty_api_key: str | None = Field(default=None, alias="CONNECTOR_PAGERDUTY_API_KEY")
 
-    model_config = {"env_prefix": "CONNECTOR_", "extra": "ignore"}
+    model_config = {
+        "env_prefix": "CONNECTOR_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 class APISettings(BaseSettings):
@@ -68,7 +83,12 @@ class APISettings(BaseSettings):
     log_format: str = Field(default="text", alias="LOG_FORMAT")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    model_config = {"env_prefix": "API_", "extra": "ignore"}
+    model_config = {
+        "env_prefix": "API_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 class Settings(BaseSettings):
