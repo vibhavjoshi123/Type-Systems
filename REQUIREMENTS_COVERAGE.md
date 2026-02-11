@@ -3,7 +3,7 @@
 Generated: 2026-02-11
 Source PDFs: Chemical_Reaction_Networks_Context_Graphs_Visual.pdf, higher_order_categorical_reasoning.pdf, TypeDB_vs_RDF_OWL_Full_Analysis.pdf
 
-## Summary: 29/35 implemented (83%), 3 partial, 3 future work
+## Summary: 30/35 implemented (86%), 2 partial, 3 future work
 
 ---
 
@@ -39,7 +39,7 @@ Source PDFs: Chemical_Reaction_Networks_Context_Graphs_Visual.pdf, higher_order_
 | 6 | 2-morphism storage (nested relations) | DONE | TypeDB schema nested relations |
 | 7 | Circular precedent detection | DONE | `governance_agent.py` lines 82-95 |
 | 8 | Universal construction computation (limits/colimits) | TODO | PDF marks as "open research problem" |
-| 9 | LLM-to-2-morphism translation | PARTIAL | LLM reasons but doesn't auto-create 2-morphism records |
+| 9 | LLM-to-2-morphism translation | DONE | `executive_agent.py:_extract_2morphisms()` + `query.py:_store_2morphisms()` |
 | 10 | Composition rules for 2-morphisms | TODO | PDF marks as future work |
 
 ## 3. TypeDB vs RDF/OWL PDF
@@ -63,7 +63,7 @@ Source PDFs: Chemical_Reaction_Networks_Context_Graphs_Visual.pdf, higher_order_
 
 ### High Priority
 - **Rich-club behavior analysis** (CRN PDF Section 4.2): Calculate rich-club coefficients for high-degree nodes. Implement in `traversal.py`.
-- **LLM-to-2-morphism translation** (Cat PDF Section 5): Have ExecutiveAgent auto-create `precedent-chain` or `exception-override` records in TypeDB when it identifies precedent/exception patterns.
+- ~~**LLM-to-2-morphism translation** (Cat PDF Section 5)~~: **DONE** — ExecutiveAgent extracts 2-morphism proposals via structured LLM call, `_store_2morphisms()` writes them back to TypeDB as decision-events. Feedback loop verified: graph compounds with each query.
 - **Coherence checking in TypeQL** (TypeDB PDF Part III): Move GovernanceAgent's coherence check from Python to TypeQL queries for better performance.
 
 ### Research / Future
