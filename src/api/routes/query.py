@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from src.agents.base import AgentQuery
 from src.agents.context_agent import ContextAgent
 from src.agents.executive_agent import ExecutiveAgent
+from src.models.decisions import TwoMorphismType
 from src.models.hyperedges import Hyperedge, RelationType, RoleAssignment
 from src.typedb.client import TypeDBClient
 from src.typedb.traversal import HypergraphTraversal
@@ -42,6 +43,8 @@ class QueryResponse(BaseModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     paths_found: int = 0
     confidence: float = 0.0
+    two_morphisms_proposed: int = 0
+    two_morphisms_stored: int = 0
 
 
 # ── Per-type queries for full attributes ────────────────────────────
@@ -150,6 +153,66 @@ def _build_hyperedges(
     return hyperedges
 
 
+_MORPHISM_TYPE_MAP: dict[str, str] = {
+    "precedent": "precedent",
+    "exception": "exception",
+    "override": "override",
+    "generalization": "generalization",
+    "sequence": "sequence",
+    "justification": "justification",
+}
+
+
+async def _store_2morphisms(
+    db: TypeDBClient,
+    proposals: list[dict[str, Any]],
+) -> int:
+    """Write 2-morphism proposals back to TypeDB as decision-event relations.
+
+    This is the feedback loop: the LLM identifies meta-relationships between
+    decisions, and we persist them so future queries have richer paths.
+
+    decision-event requires at least 1 role player (inherits @card(1..)
+    from context-hyperedge:participant), so we match an existing entity
+    to satisfy the constraint.
+    """
+    stored = 0
+    for proposal in proposals:
+        morphism_type = proposal.get("morphism_type", "precedent")
+        rationale = proposal.get("rationale", "")
+        safe_rationale = rationale.replace('"', "'").replace("\\", "")
+
+        # Map string type to TwoMorphismType enum
+        try:
+            mtype = TwoMorphismType(
+                _MORPHISM_TYPE_MAP.get(morphism_type, "precedent")
+            )
+        except ValueError:
+            mtype = TwoMorphismType.PRECEDENT
+
+        # Match any existing entity as participant (required by @card(1..))
+        # and create a decision-event recording the 2-morphism discovery.
+        try:
+            typeql = (
+                "match $e isa enterprise-entity;"
+                " limit 1;"
+                " insert (involved-entity: $e) isa decision-event,"
+                f' has decision-type "2-morphism-{mtype.value}",'
+                f' has rationale "{safe_rationale}";'
+            )
+            await db.write(typeql)
+            stored += 1
+            logger.info(
+                "Stored 2-morphism: %s (%s)",
+                mtype.value,
+                rationale[:80],
+            )
+        except Exception as exc:
+            logger.warning("Failed to store 2-morphism: %s", exc)
+
+    return stored
+
+
 @router.post("/query", response_model=QueryResponse)
 async def query_context_graph(
     request: QueryRequest, req: Request
@@ -202,9 +265,17 @@ async def query_context_graph(
     )
     exec_response = await executive_agent.process(exec_query)
 
+    # Step 4: Write 2-morphism proposals back to TypeDB
+    proposals = exec_response.metadata.get("two_morphism_proposals", [])
+    stored = 0
+    if proposals and db and db.is_connected:
+        stored = await _store_2morphisms(db, proposals)
+
     return QueryResponse(
         answer=exec_response.answer,
         evidence=exec_response.evidence,
         paths_found=exec_response.paths_found or context_response.paths_found,
         confidence=exec_response.confidence,
+        two_morphisms_proposed=len(proposals),
+        two_morphisms_stored=stored,
     )
