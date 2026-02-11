@@ -49,21 +49,36 @@ class TypeDBClient:
             from typedb.driver import Credentials, DriverOptions, TypeDB
 
             creds = Credentials(self.settings.username, self.settings.password)
-            opts_kwargs: dict[str, Any] = {
-                "is_tls_enabled": self.settings.tls_enabled,
-            }
-            if self.settings.tls_root_ca:
-                opts_kwargs["tls_root_ca_path"] = self.settings.tls_root_ca
-            opts = DriverOptions(**opts_kwargs)
 
             addr = _normalize_address(self.settings.address)
-            addresses = self._connection_candidates(addr)
+            addresses = self._connection_candidates(
+                addr, tls=self.settings.tls_enabled
+            )
 
             last_error: Exception | None = None
             for candidate in addresses:
+                # For https:// prefixed addresses, force TLS on
+                use_tls = (
+                    self.settings.tls_enabled
+                    or candidate.startswith("https://")
+                )
+                try_opts = DriverOptions(
+                    is_tls_enabled=use_tls,
+                    **(
+                        {"tls_root_ca_path": self.settings.tls_root_ca}
+                        if self.settings.tls_root_ca
+                        else {}
+                    ),
+                )
                 try:
-                    logger.info("Trying TypeDB at %s ...", candidate)
-                    self._driver = TypeDB.driver(candidate, creds, opts)
+                    logger.info(
+                        "Trying TypeDB at %s (tls=%s) ...",
+                        candidate,
+                        use_tls,
+                    )
+                    self._driver = TypeDB.driver(
+                        candidate, creds, try_opts
+                    )
                     self._connected = True
                     logger.info(
                         "Connected to TypeDB at %s", candidate
@@ -71,7 +86,9 @@ class TypeDBClient:
                     return
                 except Exception as exc:
                     logger.debug(
-                        "Could not connect to %s: %s", candidate, exc
+                        "Could not connect to %s: %s",
+                        candidate,
+                        exc,
                     )
                     last_error = exc
 
@@ -93,18 +110,44 @@ class TypeDBClient:
             self._connected = False
 
     @staticmethod
-    def _connection_candidates(addr: str) -> list[str]:
+    def _connection_candidates(
+        addr: str, *, tls: bool = False
+    ) -> list[str]:
         """Build a list of addresses to try for connection.
 
-        TypeDB Cloud may expose gRPC on port 443 while the dashboard
-        shows port 80 (HTTP). This generates fallback candidates so
-        users don't have to guess the right port.
+        TypeDB Cloud may expose gRPC on different ports (80, 443,
+        1729) and some driver versions require an ``https://`` prefix
+        for TLS.  This generates fallback candidates automatically.
         """
-        candidates = [addr]
-        # If the address uses port 80, also try 443 (common for
-        # Cloud gRPC behind TLS)
-        if addr.endswith(":80"):
-            candidates.append(addr.rsplit(":80", 1)[0] + ":443")
+        # Extract host and port
+        if ":" in addr and not addr.endswith(":"):
+            host, port = addr.rsplit(":", 1)
+        else:
+            host = addr.rstrip(":")
+            port = "1729"
+
+        if not tls:
+            # Local / Core — just use as-is
+            return [f"{host}:{port}"]
+
+        # Cloud / TLS — try multiple combos
+        ports = []
+        if port not in ("443", "80", "1729"):
+            ports.append(port)
+        ports.extend(["443", "80", "1729"])
+        # deduplicate while preserving order
+        seen: set[str] = set()
+        unique_ports: list[str] = []
+        for p in ports:
+            if p not in seen:
+                seen.add(p)
+                unique_ports.append(p)
+
+        candidates: list[str] = []
+        for p in unique_ports:
+            # Try both with and without https:// prefix
+            candidates.append(f"{host}:{p}")
+            candidates.append(f"https://{host}:{p}")
         return candidates
 
     async def disconnect(self) -> None:
