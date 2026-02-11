@@ -9,8 +9,12 @@ The Hypothesizer proposes 2-cells - typed connections between decisions.
 
 from __future__ import annotations
 
+import logging
+
 from src.agents.base import AgentQuery, AgentResponse, BaseAgent
 from src.llm.base import BaseLLMConnector
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutiveAgent(BaseAgent):
@@ -48,29 +52,33 @@ class ExecutiveAgent(BaseAgent):
 
         # If LLM is available, use it for reasoning
         if self._llm:
-            prompt = self._build_reasoning_prompt(
-                query.query, paths, entities, hyperedges, graph_summary
-            )
-            answer = await self._llm.complete(
-                prompt=prompt,
-                system_prompt=(
-                    "You are an executive reasoning agent for an enterprise "
-                    "hypergraph context graph. You analyze decision traces, "
-                    "entity relationships, and hyperedge connections to "
-                    "construct causal chains explaining how enterprise "
-                    "decisions were made. Be concise and specific."
-                ),
-            )
-            return AgentResponse(
-                answer=answer,
-                evidence=[{
-                    "paths": paths,
-                    "entities": entities,
-                    "hyperedges": hyperedges,
-                }],
-                paths_found=len(paths),
-                confidence=0.8,
-            )
+            try:
+                prompt = self._build_reasoning_prompt(
+                    query.query, paths, entities, hyperedges, graph_summary
+                )
+                answer = await self._llm.complete(
+                    prompt=prompt,
+                    system_prompt=(
+                        "You are an executive reasoning agent for an enterprise "
+                        "hypergraph context graph. You analyze decision traces, "
+                        "entity relationships, and hyperedge connections to "
+                        "construct causal chains explaining how enterprise "
+                        "decisions were made. Be concise and specific."
+                    ),
+                )
+                return AgentResponse(
+                    answer=answer,
+                    evidence=[{
+                        "paths": paths,
+                        "entities": entities,
+                        "hyperedges": hyperedges,
+                    }],
+                    paths_found=len(paths),
+                    confidence=0.8,
+                )
+            except Exception as exc:
+                logger.error("LLM call failed: %s", exc)
+                # Fall through to non-LLM response
 
         # Without LLM, return structured summary
         return AgentResponse(
