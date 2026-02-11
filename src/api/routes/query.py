@@ -167,15 +167,20 @@ async def _store_2morphisms(
     db: TypeDBClient,
     proposals: list[dict[str, Any]],
 ) -> int:
-    """Write 2-morphism proposals back to TypeDB as precedent-chain relations.
+    """Write 2-morphism proposals back to TypeDB as decision-event relations.
 
     This is the feedback loop: the LLM identifies meta-relationships between
     decisions, and we persist them so future queries have richer paths.
+
+    decision-event requires at least 1 role player (inherits @card(1..)
+    from context-hyperedge:participant), so we match an existing entity
+    to satisfy the constraint.
     """
     stored = 0
     for proposal in proposals:
         morphism_type = proposal.get("morphism_type", "precedent")
         rationale = proposal.get("rationale", "")
+        safe_rationale = rationale.replace('"', "'").replace("\\", "")
 
         # Map string type to TwoMorphismType enum
         try:
@@ -185,15 +190,15 @@ async def _store_2morphisms(
         except ValueError:
             mtype = TwoMorphismType.PRECEDENT
 
-        # For now, store as a standalone record with rationale.
-        # Since decision-events don't have entity-id in TypeDB schema
-        # (they're relations, not entities), we insert a new decision-event
-        # representing the 2-morphism discovery and link it via rationale.
+        # Match any existing entity as participant (required by @card(1..))
+        # and create a decision-event recording the 2-morphism discovery.
         try:
             typeql = (
-                f'insert $m isa decision-event,'
+                "match $e isa enterprise-entity;"
+                " limit 1;"
+                " insert (involved-entity: $e) isa decision-event,"
                 f' has decision-type "2-morphism-{mtype.value}",'
-                f' has rationale "{rationale.replace(chr(34), chr(39))}";'
+                f' has rationale "{safe_rationale}";'
             )
             await db.write(typeql)
             stored += 1
