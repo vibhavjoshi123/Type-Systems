@@ -81,7 +81,10 @@ class HypergraphOperations:
         """Fetch an entity by its ID."""
         typeql = f"""
         match
-            $e isa enterprise-entity, has entity-id "{entity_id}";
+            $e isa enterprise-entity,
+            has entity-id "{entity_id}",
+            has entity-name $name,
+            has entity-type-label $type;
         """
         results = await self.client.query(typeql)
         return results[0] if results else None
