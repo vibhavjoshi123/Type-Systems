@@ -10,11 +10,67 @@ The Hypothesizer proposes 2-cells - typed connections between decisions.
 from __future__ import annotations
 
 import logging
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from src.agents.base import AgentQuery, AgentResponse, BaseAgent
 from src.llm.base import BaseLLMConnector
 
 logger = logging.getLogger(__name__)
+
+
+class TwoMorphismProposal(BaseModel):
+    """A 2-morphism proposed by the LLM from its reasoning."""
+
+    morphism_type: str = Field(
+        description="One of: precedent, exception, override, generalization, sequence"
+    )
+    source_description: str = Field(description="Description of the source decision/event")
+    target_description: str = Field(description="Description of the target decision/event")
+    rationale: str = Field(description="Why this relationship exists")
+
+
+class TwoMorphismExtractionResult(BaseModel):
+    """Structured output from the 2-morphism extraction call."""
+
+    proposals: list[TwoMorphismProposal] = Field(default_factory=list)
+
+
+_EXTRACTION_SYSTEM = (
+    "You are a 2-morphism extraction engine for an enterprise hypergraph. "
+    "Given a reasoning analysis, identify relationships BETWEEN decisions or events. "
+    "A 2-morphism is a typed link between two hyperedges (decision events). "
+    "Types: precedent (B follows from A), exception (B overrides A), "
+    "generalization (B abstracts A), justification (A justifies B), "
+    "sequence (B follows A in time)."
+)
+
+_EXTRACTION_PROMPT = """From the reasoning below, extract any 2-morphism relationships
+(relationships BETWEEN decisions/events, not between entities).
+
+Reasoning:
+{reasoning}
+
+Hyperedges available:
+{hyperedges}
+
+Respond ONLY with valid JSON matching this schema:
+```json
+{{
+  "proposals": [
+    {{
+      "morphism_type": "precedent|exception|override|generalization|sequence|justification",
+      "source_description": "description of the source decision/event",
+      "target_description": "description of the target decision/event",
+      "rationale": "why this relationship exists"
+    }}
+  ]
+}}
+```
+
+If no 2-morphism relationships are found, return {{"proposals": []}}.
+Only propose relationships that are clearly supported by the evidence."""
 
 
 class ExecutiveAgent(BaseAgent):
@@ -66,6 +122,10 @@ class ExecutiveAgent(BaseAgent):
                         "decisions were made. Be concise and specific."
                     ),
                 )
+
+                # Extract 2-morphism proposals from the reasoning
+                proposals = await self._extract_2morphisms(answer, hyperedges)
+
                 return AgentResponse(
                     answer=answer,
                     evidence=[{
@@ -75,6 +135,11 @@ class ExecutiveAgent(BaseAgent):
                     }],
                     paths_found=len(paths),
                     confidence=0.8,
+                    metadata={
+                        "two_morphism_proposals": [
+                            p.model_dump() for p in proposals
+                        ],
+                    },
                 )
             except Exception as exc:
                 logger.error("LLM call failed: %s", exc)
@@ -95,6 +160,44 @@ class ExecutiveAgent(BaseAgent):
             paths_found=len(paths),
             confidence=0.3,
         )
+
+    async def _extract_2morphisms(
+        self,
+        reasoning: str,
+        hyperedges: list[Any],
+    ) -> list[TwoMorphismProposal]:
+        """Extract 2-morphism proposals from the LLM's reasoning output."""
+        if not self._llm:
+            return []
+
+        try:
+            prompt = _EXTRACTION_PROMPT.format(
+                reasoning=reasoning,
+                hyperedges=hyperedges,
+            )
+            raw = await self._llm.complete(
+                prompt=prompt,
+                system_prompt=_EXTRACTION_SYSTEM,
+            )
+
+            # Parse the JSON response
+            text = raw.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:])
+                if text.endswith("```"):
+                    text = text[:-3].strip()
+
+            result = TwoMorphismExtractionResult.model_validate_json(text)
+            logger.info(
+                "Extracted %d 2-morphism proposal(s) from reasoning",
+                len(result.proposals),
+            )
+            return result.proposals
+
+        except Exception as exc:
+            logger.warning("2-morphism extraction failed: %s", exc)
+            return []
 
     @staticmethod
     def _build_reasoning_prompt(
