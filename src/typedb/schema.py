@@ -116,9 +116,9 @@ relation context-hyperedge,
 
 # Decision event hyperedge - the key structure
 relation decision-event, sub context-hyperedge,
-    relates involved-entity as participant,
-    relates decision-maker as participant,
-    relates affected-entity as participant,
+    relates involved-entity as participant @card(0..),
+    relates decision-maker as participant @card(0..),
+    relates affected-entity as participant @card(0..),
     owns decision-type,
     owns relation-type-label,
     owns rationale,
