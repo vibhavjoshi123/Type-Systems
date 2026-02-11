@@ -46,8 +46,9 @@ attribute trace-id, value string;
 # Domain-specific attributes
 attribute health-score, value double;
 attribute tier, value string;
+attribute arr, value double;
 attribute department, value string;
-attribute role, value string;
+attribute job-role, value string;
 attribute title, value string;
 attribute deal-value, value double;
 attribute discount-percentage, value double;
@@ -60,6 +61,7 @@ attribute max-discount, value double;
 attribute effective-date, value datetime;
 attribute metric-value, value double;
 attribute metric-type, value string;
+attribute unit, value string;
 
 # ============ ENTITIES ============
 entity enterprise-entity @abstract,
@@ -76,11 +78,12 @@ entity enterprise-entity @abstract,
 
 entity customer, sub enterprise-entity,
     owns health-score,
-    owns tier @card(0..);
+    owns tier @card(0..),
+    owns arr;
 
 entity employee, sub enterprise-entity,
     owns department,
-    owns role,
+    owns job-role,
     owns title;
 
 entity deal, sub enterprise-entity,
@@ -100,7 +103,8 @@ entity policy, sub enterprise-entity,
 
 entity metric, sub enterprise-entity,
     owns metric-value,
-    owns metric-type;
+    owns metric-type,
+    owns unit;
 
 # ============ RELATIONS (HYPEREDGES) ============
 # Core hyperedge relation - connects N entities
@@ -112,9 +116,9 @@ relation context-hyperedge,
 
 # Decision event hyperedge - the key structure
 relation decision-event, sub context-hyperedge,
-    relates involved-entity as participant,
-    relates decision-maker as participant,
-    relates affected-entity as participant,
+    relates involved-entity as participant @card(0..),
+    relates decision-maker as participant @card(0..),
+    relates affected-entity as participant @card(0..),
     owns decision-type,
     owns relation-type-label,
     owns rationale,

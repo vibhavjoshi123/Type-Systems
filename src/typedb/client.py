@@ -13,11 +13,21 @@ TypeDB 3.x changes from 2.x:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from src.config import TypeDBSettings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_address(address: str) -> str:
+    """Normalize a TypeDB address to host:port format.
+
+    Strips http(s):// protocol prefixes since the TypeDB gRPC driver
+    controls TLS via DriverOptions, not the URL scheme.
+    """
+    return re.sub(r"^https?://", "", address).rstrip("/")
 
 
 class TypeDBClient:
@@ -39,16 +49,58 @@ class TypeDBClient:
             from typedb.driver import Credentials, DriverOptions, TypeDB
 
             creds = Credentials(self.settings.username, self.settings.password)
-            opts_kwargs: dict[str, Any] = {
-                "is_tls_enabled": self.settings.tls_enabled,
-            }
-            if self.settings.tls_root_ca:
-                opts_kwargs["tls_root_ca_path"] = self.settings.tls_root_ca
-            opts = DriverOptions(**opts_kwargs)
 
-            self._driver = TypeDB.driver(self.settings.address, creds, opts)
-            self._connected = True
-            logger.info("Connected to TypeDB at %s", self.settings.address)
+            addr = _normalize_address(self.settings.address)
+            addresses = self._connection_candidates(
+                addr, tls=self.settings.tls_enabled
+            )
+
+            last_error: Exception | None = None
+            for candidate in addresses:
+                # For https:// prefixed addresses, force TLS on
+                use_tls = (
+                    self.settings.tls_enabled
+                    or candidate.startswith("https://")
+                )
+                try_opts = DriverOptions(
+                    is_tls_enabled=use_tls,
+                    **(
+                        {"tls_root_ca_path": self.settings.tls_root_ca}
+                        if self.settings.tls_root_ca
+                        else {}
+                    ),
+                )
+                try:
+                    logger.info(
+                        "Trying TypeDB at %s (tls=%s) ...",
+                        candidate,
+                        use_tls,
+                    )
+                    self._driver = TypeDB.driver(
+                        candidate, creds, try_opts
+                    )
+                    self._connected = True
+                    logger.info(
+                        "Connected to TypeDB at %s", candidate
+                    )
+                    return
+                except Exception as exc:
+                    logger.debug(
+                        "Could not connect to %s: %s",
+                        candidate,
+                        exc,
+                    )
+                    last_error = exc
+
+            # All candidates failed
+            logger.error(
+                "Failed to connect to TypeDB. Tried: %s. "
+                "Last error: %s",
+                ", ".join(addresses),
+                last_error,
+            )
+            self._driver = None
+            self._connected = False
         except ImportError:
             logger.warning(
                 "typedb-driver not installed. Using in-memory fallback. "
@@ -56,10 +108,47 @@ class TypeDBClient:
             )
             self._driver = None
             self._connected = False
-        except Exception:
-            logger.exception("Failed to connect to TypeDB at %s", self.settings.address)
-            self._driver = None
-            self._connected = False
+
+    @staticmethod
+    def _connection_candidates(
+        addr: str, *, tls: bool = False
+    ) -> list[str]:
+        """Build a list of addresses to try for connection.
+
+        TypeDB Cloud may expose gRPC on different ports (80, 443,
+        1729) and some driver versions require an ``https://`` prefix
+        for TLS.  This generates fallback candidates automatically.
+        """
+        # Extract host and port
+        if ":" in addr and not addr.endswith(":"):
+            host, port = addr.rsplit(":", 1)
+        else:
+            host = addr.rstrip(":")
+            port = "1729"
+
+        if not tls:
+            # Local / Core — just use as-is
+            return [f"{host}:{port}"]
+
+        # Cloud / TLS — try multiple combos
+        ports = []
+        if port not in ("443", "80", "1729"):
+            ports.append(port)
+        ports.extend(["443", "80", "1729"])
+        # deduplicate while preserving order
+        seen: set[str] = set()
+        unique_ports: list[str] = []
+        for p in ports:
+            if p not in seen:
+                seen.add(p)
+                unique_ports.append(p)
+
+        candidates: list[str] = []
+        for p in unique_ports:
+            # Try both with and without https:// prefix
+            candidates.append(f"{host}:{p}")
+            candidates.append(f"https://{host}:{p}")
+        return candidates
 
     async def disconnect(self) -> None:
         """Close the TypeDB connection."""

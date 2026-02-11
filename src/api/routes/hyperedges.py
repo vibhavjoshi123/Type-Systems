@@ -92,6 +92,20 @@ async def create_hyperedge(
     )
 
 
+@router.get("/hyperedges", response_model=list[dict[str, Any]])
+async def list_hyperedges(req: Request) -> list[dict[str, Any]]:
+    """List all hyperedges (decision events) in the graph."""
+    db = _get_db(req)
+    if not db:
+        raise HTTPException(status_code=503, detail="TypeDB not connected.")
+
+    results = await db.query(
+        "match $h isa decision-event,"
+        " has decision-type $dt;"
+    )
+    return results
+
+
 @router.get("/hyperedges/{entity_id}", response_model=list[HyperedgeResponse])
 async def get_hyperedges_for_entity(
     entity_id: str, req: Request

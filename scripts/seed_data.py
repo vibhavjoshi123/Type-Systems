@@ -51,7 +51,7 @@ async def main() -> None:
             entity_id="emp_001",
             entity_name="VP Sales",
             department="Sales",
-            role="VP",
+            job_role="VP",
             title="Vice President of Sales",
         )
         await ops.insert_entity(vp_sales)

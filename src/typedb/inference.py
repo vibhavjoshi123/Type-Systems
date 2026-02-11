@@ -108,8 +108,14 @@ class InferenceManager:
                 await self.client.load_schema(typeql)
                 loaded += 1
                 logger.info("Loaded function: %s", func.name)
-            except Exception:
-                logger.exception("Failed to load function: %s", func.name)
+            except Exception as exc:
+                if "already exists" in str(exc):
+                    logger.info("Function already loaded: %s", func.name)
+                    loaded += 1
+                else:
+                    logger.exception(
+                        "Failed to load function: %s", func.name
+                    )
 
         return loaded
 

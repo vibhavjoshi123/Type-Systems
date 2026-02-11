@@ -37,16 +37,32 @@ async def setup(seed: bool = False) -> None:
     async with TypeDBClient(settings.typedb) as client:
         if not client.is_connected:
             logger.error(
-                "Could not connect to TypeDB at %s. "
-                "Ensure TypeDB is running. For local: "
-                "docker run -d --name typedb -p 1729:1729 typedb/typedb:latest "
-                "For Cloud: check TYPEDB_ADDRESS, TYPEDB_USERNAME, TYPEDB_PASSWORD",
+                "Could not connect to TypeDB at %s.",
                 settings.typedb.address,
+            )
+            logger.error(
+                "Troubleshooting:\n"
+                "  1. Check TYPEDB_ADDRESS in .env "
+                "(Cloud format: rv7ii3-0.cluster.typedb.com:443)\n"
+                "  2. Ensure TYPEDB_TLS_ENABLED=true for Cloud\n"
+                "  3. Verify TYPEDB_USERNAME and TYPEDB_PASSWORD\n"
+                "  4. For local: "
+                "docker run -d --name typedb -p 1729:1729 "
+                "typedb/typedb:latest"
             )
             sys.exit(1)
 
-        # Step 1: Create database
-        logger.info("Step 1/5: Creating database '%s'...", settings.typedb.database)
+        # Step 1: Create database (drop first if --reset)
+        db_name = settings.typedb.database
+        logger.info("Step 1/5: Creating database '%s'...", db_name)
+        if seed and client._driver:
+            # On seed runs, drop existing DB to avoid stale schema
+            try:
+                if client._driver.databases.contains(db_name):
+                    client._driver.databases.get(db_name).delete()
+                    logger.info("Dropped existing database: %s", db_name)
+            except Exception:
+                logger.debug("Could not drop database (may not exist)")
         created = await client.ensure_database()
         if created:
             logger.info("Database created successfully")
@@ -104,7 +120,7 @@ async def _seed_data(client: object) -> None:
             entity_id="emp_001",
             entity_name="Sarah Chen",
             department="Sales",
-            role="VP",
+            job_role="VP",
             title="VP of Sales",
             source_system="workday",
         ),

@@ -78,21 +78,24 @@ async def get_entity(entity_id: str, req: Request) -> EntityResponse:
     if not db:
         raise HTTPException(
             status_code=503,
-            detail="TypeDB not connected. Configure TYPEDB_HOST and TYPEDB_PORT.",
+            detail="TypeDB not connected.",
         )
 
     ops = HypergraphOperations(db)
     result = await ops.get_entity(entity_id)
     if not result:
-        raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Entity not found: {entity_id}"
+        )
 
-    attrs = result.get("e", {})
     return EntityResponse(
-        entity_id=attrs.get("entity-id", entity_id),
-        entity_name=attrs.get("entity-name", ""),
-        entity_type=attrs.get("entity-type-label", "customer"),
-        source_system=attrs.get("source-system"),
-        attributes=attrs,
+        entity_id=entity_id,
+        entity_name=_val(result, "name", "entity-name", "entity_name"),
+        entity_type=_val(
+            result, "etype", "type", "entity-type-label", "entity_type"
+        ),
+        source_system=_val(result, "source-system", "source_system"),
+        attributes=result,
     )
 
 
@@ -105,30 +108,42 @@ async def list_entities(
     if not db:
         raise HTTPException(
             status_code=503,
-            detail="TypeDB not connected. Configure TYPEDB_HOST and TYPEDB_PORT.",
+            detail="TypeDB not connected.",
         )
 
     ops = HypergraphOperations(db)
     if entity_type:
         results = await ops.get_entities_by_type(entity_type)
     else:
+        # Use match with attribute variables instead of fetch
         results = await db.query(
-            "match $e isa enterprise-entity; fetch $e: attribute;"
+            "match $e isa enterprise-entity,"
+            " has entity-id $id,"
+            " has entity-name $name,"
+            " has entity-type-label $etype;"
         )
 
     entities: list[EntityResponse] = []
     for result in results:
-        attrs = result.get("e", {})
         entities.append(
             EntityResponse(
-                entity_id=attrs.get("entity-id", ""),
-                entity_name=attrs.get("entity-name", ""),
-                entity_type=attrs.get("entity-type-label", "customer"),
-                source_system=attrs.get("source-system"),
-                attributes=attrs,
+                entity_id=_val(result, "id", "entity-id"),
+                entity_name=_val(result, "name", "entity-name"),
+                entity_type=_val(result, "etype", "type", "entity-type-label"),
+                source_system=None,
+                attributes=result,
             )
         )
     return entities
+
+
+def _val(result: dict, *keys: str) -> str:
+    """Extract a value from a TypeDB result dict, trying multiple keys."""
+    for key in keys:
+        v = result.get(key)
+        if v is not None:
+            return str(v) if not isinstance(v, str) else v
+    return ""
 
 
 @router.delete("/entities/{entity_id}", status_code=204)

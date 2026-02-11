@@ -52,7 +52,7 @@ class Employee(Entity):
 
     entity_type: EntityType = EntityType.EMPLOYEE
     department: str | None = None
-    role: str | None = None
+    job_role: str | None = None
     title: str | None = None
 
 

@@ -22,6 +22,8 @@ from src.api.middleware.auth import APIKeyMiddleware
 from src.api.middleware.rate_limit import RateLimitMiddleware
 from src.api.routes import connectors, entities, hyperedges, query
 from src.config import get_settings
+from src.llm.anthropic import AnthropicConnector
+from src.llm.base import LLMConfig
 from src.typedb.client import TypeDBClient
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     client = TypeDBClient(settings.typedb)
     await client.connect()
     app.state.db = client
+
+    # Initialize LLM connector if API key is configured
+    app.state.llm = None
+    if settings.llm.anthropic_api_key:
+        llm_config = LLMConfig(
+            provider="anthropic",
+            model=settings.llm.default_model,
+            api_key=settings.llm.anthropic_api_key,
+            max_tokens=settings.llm.max_tokens,
+            temperature=settings.llm.temperature,
+        )
+        app.state.llm = AnthropicConnector(llm_config)
+        logger.info("Anthropic LLM connector initialized (model: %s)", settings.llm.default_model)
+    else:
+        logger.info("No LLM API key configured — agents will run without LLM reasoning")
 
     logger.info(
         "API started (TypeDB connected: %s)", client.is_connected
