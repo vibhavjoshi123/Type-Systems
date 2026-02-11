@@ -52,8 +52,17 @@ async def setup(seed: bool = False) -> None:
             )
             sys.exit(1)
 
-        # Step 1: Create database
-        logger.info("Step 1/5: Creating database '%s'...", settings.typedb.database)
+        # Step 1: Create database (drop first if --reset)
+        db_name = settings.typedb.database
+        logger.info("Step 1/5: Creating database '%s'...", db_name)
+        if seed and client._driver:
+            # On seed runs, drop existing DB to avoid stale schema
+            try:
+                if client._driver.databases.contains(db_name):
+                    client._driver.databases.get(db_name).delete()
+                    logger.info("Dropped existing database: %s", db_name)
+            except Exception:
+                logger.debug("Could not drop database (may not exist)")
         created = await client.ensure_database()
         if created:
             logger.info("Database created successfully")
