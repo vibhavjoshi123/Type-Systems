@@ -172,6 +172,10 @@ async def _store_2morphisms(
     This is the feedback loop: the LLM identifies meta-relationships between
     decisions, and we persist them so future queries have richer paths.
 
+    Deduplication: before inserting, checks if a decision-event with the
+    same decision-type and rationale already exists.  This prevents infinite
+    compounding on repeated / similar queries.
+
     decision-event requires at least 1 role player (inherits @card(1..)
     from context-hyperedge:participant), so we match an existing entity
     to satisfy the constraint.
@@ -190,6 +194,25 @@ async def _store_2morphisms(
         except ValueError:
             mtype = TwoMorphismType.PRECEDENT
 
+        dt_label = f"2-morphism-{mtype.value}"
+
+        # ── Dedup check: skip if identical decision-type + rationale exists ──
+        try:
+            existing = await db.query(
+                "match $h isa decision-event,"
+                f' has decision-type "{dt_label}",'
+                f' has rationale "{safe_rationale}";'
+            )
+            if existing:
+                logger.debug(
+                    "Skipping duplicate 2-morphism: %s (%s)",
+                    mtype.value,
+                    rationale[:80],
+                )
+                continue
+        except Exception as exc:
+            logger.debug("Dedup check failed, proceeding with insert: %s", exc)
+
         # Match any existing entity as participant (required by @card(1..))
         # and create a decision-event recording the 2-morphism discovery.
         try:
@@ -197,7 +220,7 @@ async def _store_2morphisms(
                 "match $e isa enterprise-entity;"
                 " limit 1;"
                 " insert (involved-entity: $e) isa decision-event,"
-                f' has decision-type "2-morphism-{mtype.value}",'
+                f' has decision-type "{dt_label}",'
                 f' has rationale "{safe_rationale}";'
             )
             await db.write(typeql)
