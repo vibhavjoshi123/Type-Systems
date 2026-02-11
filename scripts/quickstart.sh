@@ -144,9 +144,12 @@ echo ""
 echo "  Try these endpoints:"
 echo "    curl http://localhost:8000/health"
 echo "    curl http://localhost:8000/api/v1/entities"
-echo "    curl -X POST http://localhost:8000/api/v1/entities \\"
+echo "    curl http://localhost:8000/api/v1/hyperedges"
+echo ""
+echo "  Query with Claude reasoning (hits Anthropic API):"
+echo '    curl -X POST http://localhost:8000/api/v1/query \'
 echo '      -H "Content-Type: application/json" \'
-echo '      -d '"'"'{"entity_id":"test_001","entity_name":"Test Corp","entity_type":"customer"}'"'"''
+echo '      -d '"'"'{"query":"Why was the Acme discount approved?"}'"'"''
 echo ""
 echo "  Press Ctrl+C to stop the server."
 echo "============================================================"
