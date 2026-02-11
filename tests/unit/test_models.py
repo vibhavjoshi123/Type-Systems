@@ -48,7 +48,7 @@ class TestEntity:
             entity_id="emp_001",
             entity_name="VP Sales",
             department="Sales",
-            role="VP",
+            job_role="VP",
         )
         assert e.entity_type == EntityType.EMPLOYEE
         assert e.department == "Sales"

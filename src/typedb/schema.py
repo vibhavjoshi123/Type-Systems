@@ -47,7 +47,7 @@ attribute trace-id, value string;
 attribute health-score, value double;
 attribute tier, value string;
 attribute department, value string;
-attribute role, value string;
+attribute job-role, value string;
 attribute title, value string;
 attribute deal-value, value double;
 attribute discount-percentage, value double;
@@ -80,7 +80,7 @@ entity customer, sub enterprise-entity,
 
 entity employee, sub enterprise-entity,
     owns department,
-    owns role,
+    owns job-role,
     owns title;
 
 entity deal, sub enterprise-entity,

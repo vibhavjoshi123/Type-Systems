@@ -111,7 +111,7 @@ async def _seed_data(client: object) -> None:
             entity_id="emp_001",
             entity_name="Sarah Chen",
             department="Sales",
-            role="VP",
+            job_role="VP",
             title="VP of Sales",
             source_system="workday",
         ),

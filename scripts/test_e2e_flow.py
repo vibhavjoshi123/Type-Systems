@@ -147,8 +147,8 @@ step("Create Enterprise Entities")
 entities_to_create = [
     ("customer", "cust_001", "Acme Corp", {"health_score": 72.0, "tier": "enterprise"}),
     ("customer", "cust_002", "Globex Inc", {"health_score": 45.0, "tier": "mid-market"}),
-    ("employee", "emp_001", "Sarah Chen", {"department": "Sales", "role": "VP"}),
-    ("employee", "emp_002", "James Lee", {"department": "Support", "role": "Manager"}),
+    ("employee", "emp_001", "Sarah Chen", {"department": "Sales", "job_role": "VP"}),
+    ("employee", "emp_002", "James Lee", {"department": "Support", "job_role": "Manager"}),
     ("deal", "deal_001", "Acme Renewal Q1", {"deal_value": 500000.0, "stage": "negotiation"}),
     ("ticket", "tkt_001", "Prod Outage Jan 2026", {"severity": "SEV-1", "status": "resolved"}),
     ("ticket", "tkt_002", "API Latency Issue", {"severity": "SEV-2", "status": "open"}),
