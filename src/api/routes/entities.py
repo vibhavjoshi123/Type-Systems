@@ -89,10 +89,10 @@ async def get_entity(entity_id: str, req: Request) -> EntityResponse:
         )
 
     return EntityResponse(
-        entity_id=_val(result, "id", "entity-id", "entity_id"),
+        entity_id=entity_id,
         entity_name=_val(result, "name", "entity-name", "entity_name"),
         entity_type=_val(
-            result, "type", "entity-type-label", "entity_type"
+            result, "etype", "type", "entity-type-label", "entity_type"
         ),
         source_system=_val(result, "source-system", "source_system"),
         attributes=result,
@@ -120,7 +120,7 @@ async def list_entities(
             "match $e isa enterprise-entity,"
             " has entity-id $id,"
             " has entity-name $name,"
-            " has entity-type-label $type;"
+            " has entity-type-label $etype;"
         )
 
     entities: list[EntityResponse] = []
@@ -129,7 +129,7 @@ async def list_entities(
             EntityResponse(
                 entity_id=_val(result, "id", "entity-id"),
                 entity_name=_val(result, "name", "entity-name"),
-                entity_type=_val(result, "type", "entity-type-label"),
+                entity_type=_val(result, "etype", "type", "entity-type-label"),
                 source_system=None,
                 attributes=result,
             )

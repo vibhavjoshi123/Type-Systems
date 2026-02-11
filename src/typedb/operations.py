@@ -84,7 +84,7 @@ class HypergraphOperations:
             $e isa enterprise-entity,
             has entity-id "{entity_id}",
             has entity-name $name,
-            has entity-type-label $type;
+            has entity-type-label $etype;
         """
         results = await self.client.query(typeql)
         return results[0] if results else None
