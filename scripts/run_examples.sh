@@ -200,6 +200,11 @@ $(echo "$RESULT" | python3 -m json.tool 2>/dev/null || echo "$RESULT")
 EOF
 
     echo "    → Confidence: $CONFIDENCE | 2-morphisms: $PROPOSED proposed, $STORED stored"
+    echo ""
+    echo "    ── Claude's Reasoning ──────────────────────────────────────"
+    echo "$ANSWER" | while IFS= read -r line; do echo "    $line"; done
+    echo "    ─────────────────────────────────────────────────────────────"
+    echo ""
 }
 
 # ── Run all queries (with delays to avoid API rate limits) ──────
