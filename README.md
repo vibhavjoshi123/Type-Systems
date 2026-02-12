@@ -181,7 +181,19 @@ The `/api/v1/query` endpoint executes the full multi-agent pipeline:
 
 **Example:** `"Why was the Acme discount approved?"` — Claude traces the full causal chain through the hypergraph: SEV-1 outage → renewal negotiation → policy exception → VP override → 20% discount approved. It identifies this decision as the **precedent** that later justified Initech's 18% churn prevention discount.
 
-For full walkthrough with all queries and diagrams, see **[EXAMPLES.md](EXAMPLES.md)**.
+**Graph growth from feedback loop:** Started with 6 seed hyperedges → after 5 queries, the graph grew to **23 hyperedges** as Claude extracted and stored new 2-morphism relationships.
+
+| Query | Confidence | 2-Morphisms Proposed | Stored |
+|---|---|---|---|
+| "Why was the Acme discount approved?" | 0.8 | 6 | 6 |
+| "What precedents exist for above-policy discounts?" | 0.8 | 7 | 1 |
+| "How are Acme, Globex and Initech connected?" | 0.8 | 6 | 2 |
+| "What is Sarah Chen's role across all decisions?" | 0.8 | 7 | 0 |
+| "Risk of more above-policy discounts?" | 0.8 | 8 | 8 |
+
+For full Claude reasoning output from all 5 queries, see **[EXAMPLE_RESULTS.md](EXAMPLE_RESULTS.md)**.
+
+For seed data walkthrough, 2-morphism diagrams, and query explanations, see **[EXAMPLES.md](EXAMPLES.md)**.
 
 ## Project Structure
 
