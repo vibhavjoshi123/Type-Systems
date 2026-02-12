@@ -202,22 +202,34 @@ EOF
     echo "    → Confidence: $CONFIDENCE | 2-morphisms: $PROPOSED proposed, $STORED stored"
 }
 
-# ── Run all queries ─────────────────────────────────────────────
+# ── Run all queries (with delays to avoid API rate limits) ──────
 run_query 1 \
     "Why was the Acme discount approved?" \
     "Why was the Acme discount approved?"
+
+echo "  Waiting 5s (rate limit cooldown)..."
+sleep 5
 
 run_query 2 \
     "What precedents exist for above-policy discounts?" \
     "What precedents exist for giving discounts above policy limits?"
 
+echo "  Waiting 5s (rate limit cooldown)..."
+sleep 5
+
 run_query 3 \
     "How are Acme, Globex, and Initech connected?" \
     "How are Acme, Globex and Initech decisions connected?"
 
+echo "  Waiting 5s (rate limit cooldown)..."
+sleep 5
+
 run_query 4 \
     "What is Sarah Chen's role across all decisions?" \
     "What role does Sarah Chen play across all enterprise decisions and what patterns emerge?"
+
+echo "  Waiting 5s (rate limit cooldown)..."
+sleep 5
 
 run_query 5 \
     "Risk of more above-policy discounts?" \
