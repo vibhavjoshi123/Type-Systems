@@ -15,6 +15,19 @@
 # ═══════════════════════════════════════════════════════════════
 set -e
 
+# ── Activate virtual environment ────────────────────────────────
+if [ -f ".venv/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+    echo "Using venv Python: $(python3 --version) at $(which python3)"
+elif [ -f "venv/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source venv/bin/activate
+    echo "Using venv Python: $(python3 --version) at $(which python3)"
+else
+    echo "WARNING: No .venv found. Using system Python: $(python3 --version)"
+fi
+
 BASE_URL="http://localhost:8000"
 OUTPUT="EXAMPLE_RESULTS.md"
 SERVER_PID=""
