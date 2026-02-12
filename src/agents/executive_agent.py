@@ -142,8 +142,12 @@ class ExecutiveAgent(BaseAgent):
                     },
                 )
             except Exception as exc:
-                logger.error("LLM call failed: %s", exc)
-                # Fall through to non-LLM response
+                logger.error(
+                    "LLM call failed (%s): %s",
+                    type(exc).__name__,
+                    exc,
+                )
+                # Fall through to non-LLM response (confidence=0.3)
 
         # Without LLM, return structured summary
         return AgentResponse(

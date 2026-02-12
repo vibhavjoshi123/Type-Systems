@@ -8,13 +8,20 @@
 
 This project implements a hypergraph-based context graph system for enterprise decision-making, 
 
-## Why Hypergraphs?
+## Why Context Graphs?
 
-Traditional knowledge graphs use pairwise edges (connecting exactly 2 nodes). But enterprise decisions are **n-ary** – they involve multiple entities simultaneously:
+> *"The last generation of enterprise software became trillion-dollar companies by owning **what happened**. The next trillion-dollar opportunity? Owning **why it happened**."*
+> — [Foundation Capital](https://foundationcapital.com/context-graphs-ais-trillion-dollar-opportunity/)
+
+Traditional systems of record store **what** — a deal closed, a ticket resolved. Context graphs capture **why** — the decision traces showing how rules were applied, where exceptions were granted, and why actions were allowed.
+
+Traditional knowledge graphs use pairwise edges (2 nodes). But enterprise decisions are **n-ary** — they involve multiple entities simultaneously:
 
 > "When a renewal agent proposes a 20% discount, it doesn't just pull from the CRM. It pulls from PagerDuty for incident history, Zendesk for escalation threads, Slack for VP approval from last quarter, Salesforce for the deal record, Snowflake for usage data, and the semantic layer for the definition of 'healthy customer'."
 
-**Hypergraphs** solve this by allowing edges (hyperedges) to connect 3+ nodes, preserving the full context of enterprise decisions.
+**Hypergraphs** solve this by allowing edges (hyperedges) to connect 3+ nodes. **2-morphisms** go further — they capture relationships *between* decisions (precedent chains, exception overrides), so the graph gets smarter with each query.
+
+See **[EXAMPLES.md](EXAMPLES.md)** for a full walkthrough with seed data, 2-morphism diagrams, and example queries.
 
 ## Architecture
 
@@ -150,33 +157,43 @@ curl -X POST http://localhost:8000/api/v1/query \
   -d '{"query":"Why was the Acme discount approved?"}'
 ```
 
-### Agent Pipeline Test
+### Agent Pipeline: Decision Traces + 2-Morphisms
 
 The `/api/v1/query` endpoint executes the full multi-agent pipeline:
 
-1. **TypeDB Cloud** - Fetches all entities with full attributes (health_score, ARR, discount_percentage, severity, etc.) and decision hyperedges with rationale and role players
-2. **ContextAgent** - Runs s-adjacency traversal (IS >= 2) over real hyperedge objects, finds s-connected components
-3. **ExecutiveAgent** - Sends the full graph context to Claude via Anthropic API for mechanistic reasoning
+1. **TypeDB Cloud** — Fetches 16 entities with full attributes and 6 decision hyperedges with rationale, role players, and existing 2-morphisms
+2. **ContextAgent** — Runs s-adjacency traversal (IS >= 2) over real hyperedge objects, finds s-connected components
+3. **ExecutiveAgent** — Sends the full graph context to Claude for mechanistic reasoning
+4. **2-Morphism Extraction** — Claude identifies precedent/exception patterns between decisions
+5. **TypeDB Writeback** — New 2-morphisms stored back to TypeDB (with deduplication)
 
-**Example query:** `"Why was the Acme discount approved?"`
+**Seed data:** 16 entities (3 customers, 4 employees, 3 deals, 3 tickets, 3 policies), 6 interconnected decisions, 4 explicit 2-morphisms (2 precedent-chains + 2 exception-overrides).
 
-**Claude's response (verified correct against seed data):**
-> The Acme discount was approved because VP of Sales Sarah Chen exercised executive override authority to grant a 20% discount (exceeding the standard 15% policy limit) based on two factors: Acme Corp's strategic account status as an enterprise customer with $500K ARR and their history of experiencing a SEV-1 production outage.
-
-**Causal chain identified:**
 ```
-Acme Corp (Enterprise, $500K ARR)
-    -> Production Outage (SEV-1, Jan 2026)
-    -> Q1 Renewal Deal ($500K, 20% discount)
-    -> Standard Discount Policy (15% limit) <- constraint
-    -> VP Sarah Chen -> Executive Override
-    -> Discount Approved (20%)
+2-MORPHISM DIAGRAM:
+
+  Dec1: Acme Discount ──precedent──→ Dec6: Initech Churn Prevention
+       ↑ exception                         ↑ exception
+  Dec2: Globex Expansion              Dec3: Initech Escalation
+
+  Dec4: Acme SLA Credit ──precedent──→ Dec5: Globex Migration Compensation
 ```
 
-**Evidence returned includes:**
-- 5 entities with full domain attributes (health_score=72, arr=500K, discount=20%, max_discount=15%, severity=SEV-1)
-- 1 decision hyperedge with rationale and 5 role players (4 involved-entity + 1 decision-maker)
-- 1 s-connected component found via IS >= 2 traversal
+**Example:** `"Why was the Acme discount approved?"` — Claude traces the full causal chain through the hypergraph: SEV-1 outage → renewal negotiation → policy exception → VP override → 20% discount approved. It identifies this decision as the **precedent** that later justified Initech's 18% churn prevention discount.
+
+**Graph growth from feedback loop:** Started with 6 seed hyperedges → after 5 queries, the graph grew to **23 hyperedges** as Claude extracted and stored new 2-morphism relationships.
+
+| Query | Confidence | 2-Morphisms Proposed | Stored |
+|---|---|---|---|
+| "Why was the Acme discount approved?" | 0.8 | 6 | 6 |
+| "What precedents exist for above-policy discounts?" | 0.8 | 7 | 1 |
+| "How are Acme, Globex and Initech connected?" | 0.8 | 6 | 2 |
+| "What is Sarah Chen's role across all decisions?" | 0.8 | 7 | 0 |
+| "Risk of more above-policy discounts?" | 0.8 | 8 | 8 |
+
+For full Claude reasoning output from all 5 queries, see **[EXAMPLE_RESULTS.md](EXAMPLE_RESULTS.md)**.
+
+For seed data walkthrough, 2-morphism diagrams, and query explanations, see **[EXAMPLES.md](EXAMPLES.md)**.
 
 ## Project Structure
 
@@ -214,7 +231,7 @@ mypy src/
 
 ## Requirements Coverage
 
-See [REQUIREMENTS_COVERAGE.md](REQUIREMENTS_COVERAGE.md) for a detailed comparison of all three research PDFs against the codebase. **29/35 requirements implemented (83%)**, with the 3 missing items explicitly marked as "open research" in the source documents.
+See [REQUIREMENTS_COVERAGE.md](REQUIREMENTS_COVERAGE.md) for a detailed comparison of all three research PDFs against the codebase. **30/35 requirements implemented (86%)**, with the 3 missing items explicitly marked as "open research" in the source documents.
 
 ## Roadmap
 
@@ -229,10 +246,12 @@ See [REQUIREMENTS_COVERAGE.md](REQUIREMENTS_COVERAGE.md) for a detailed comparis
 
 ## References
 
-1. [Chemical Reaction Networks as Context Graphs](Chemical_Reaction_Networks_Context_Graphs_Visual.pdf) - Core isomorphism between chemical and enterprise hypergraphs
-2. [Higher-Order Categorical Reasoning](higher_order_categorical_reasoning.pdf) - 2-morphisms, agent architecture, coherence verification
-3. [TypeDB vs RDF/OWL Analysis](TypeDB_vs_RDF_OWL_Full_Analysis.pdf) - Why TypeDB PERA model for native n-ary relations
-4. [TypeDB Documentation](https://typedb.com/docs)
+1. [Context Graphs: AI's Trillion-Dollar Opportunity](https://foundationcapital.com/context-graphs-ais-trillion-dollar-opportunity/) — Foundation Capital (Jaya Gupta & Ashu Garg)
+2. [Context Graphs: Who Actually Captures It?](https://www.linkedin.com/pulse/context-graphs-trillion-dollar-opportunity-who-actually-prukalpa--kxadc/) — Prukalpa, Metadata Weekly
+3. [Chemical Reaction Networks as Context Graphs](Chemical_Reaction_Networks_Context_Graphs_Visual.pdf) — CRN-to-enterprise isomorphism, s-adjacency, IS >= 2
+4. [Higher-Order Categorical Reasoning](higher_order_categorical_reasoning.pdf) — 2-morphisms, agent architecture, coherence verification
+5. [TypeDB vs RDF/OWL Analysis](TypeDB_vs_RDF_OWL_Full_Analysis.pdf) — Why TypeDB PERA model for native n-ary relations
+6. [TypeDB Documentation](https://typedb.com/docs)
 
 
 ## License

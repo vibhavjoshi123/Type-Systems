@@ -9,6 +9,7 @@ entity extraction, reasoning, and interpretation tasks.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TypeVar
@@ -66,7 +67,11 @@ class AnthropicConnector(BaseLLMConnector):
         system_prompt: str | None = None,
         **kwargs: object,
     ) -> str:
-        """Generate a text completion using Claude."""
+        """Generate a text completion using Claude.
+
+        Retries up to 3 times with exponential backoff on rate-limit (429)
+        or transient server errors (5xx).
+        """
         client = await self._ensure_client()
 
         messages = [{"role": "user", "content": prompt}]
@@ -79,8 +84,33 @@ class AnthropicConnector(BaseLLMConnector):
         if system_prompt:
             create_kwargs["system"] = system_prompt
 
-        response = await client.messages.create(**create_kwargs)  # type: ignore[union-attr]
-        return response.content[0].text  # type: ignore[union-attr]
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.messages.create(**create_kwargs)  # type: ignore[union-attr]
+                return response.content[0].text  # type: ignore[union-attr]
+            except Exception as exc:
+                exc_str = str(exc)
+                is_retryable = (
+                    "rate" in exc_str.lower()
+                    or "429" in exc_str
+                    or "529" in exc_str
+                    or "overloaded" in exc_str.lower()
+                    or "500" in exc_str
+                    or "503" in exc_str
+                )
+                if is_retryable and attempt < max_retries:
+                    wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                    logger.warning(
+                        "Anthropic API error (attempt %d/%d), retrying in %ds: %s",
+                        attempt + 1,
+                        max_retries,
+                        wait,
+                        exc_str[:120],
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
     async def complete_structured(
         self,
