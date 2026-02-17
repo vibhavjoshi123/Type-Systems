@@ -1,0 +1,67 @@
+domain: scotus-citations
+description: >
+  U.S. Supreme Court case citation network. Cases are decision-events
+  (hyperedges) connecting justices, legal topics, and parties.
+  Citations between cases are 2-morphisms: precedent-chains,
+  exception-overrides, and concurrence/dissent relationships.
+
+entity_types:
+  - name: justice
+    description: "Supreme Court justice who authored or joined an opinion"
+    attributes: [name, appointed_by, start_year, end_year]
+  - name: topic
+    description: "Legal topic or constitutional provision (e.g., First Amendment, Due Process)"
+    attributes: [name, category]
+  - name: party
+    description: "Petitioner or respondent in a case"
+    attributes: [name, party_type]
+  - name: court
+    description: "Court of origin (lower court being appealed)"
+    attributes: [name, level]
+
+relation_types:
+  - name: case-decision
+    description: >
+      A Supreme Court case as a hyperedge connecting all participants:
+      majority author, concurring justices, dissenting justices,
+      petitioner, respondent, and legal topics addressed.
+      This is naturally N-ary: Roe v. Wade connects 9 justices +
+      2 parties + 3 legal topics = 14 entities in ONE decision.
+    roles:
+      - name: majority-author
+        entity_types: [justice]
+        required: true
+      - name: concurring-justice
+        entity_types: [justice]
+        required: false
+      - name: dissenting-justice
+        entity_types: [justice]
+        required: false
+      - name: petitioner
+        entity_types: [party]
+        required: false
+      - name: respondent
+        entity_types: [party]
+        required: false
+      - name: legal-topic
+        entity_types: [topic]
+        required: true
+    min_participants: 2
+
+morphism_types:
+  - name: precedent
+    description: "Case A establishes precedent relied upon by Case B"
+    source_relation: case-decision
+    target_relation: case-decision
+  - name: overruled
+    description: "Case B explicitly overrules Case A"
+    source_relation: case-decision
+    target_relation: case-decision
+  - name: distinguished
+    description: "Case B distinguishes itself from Case A (narrows applicability)"
+    source_relation: case-decision
+    target_relation: case-decision
+  - name: affirmed
+    description: "Case B affirms and strengthens Case A's holding"
+    source_relation: case-decision
+    target_relation: case-decision

@@ -1,0 +1,64 @@
+domain: icij-offshore-leaks
+description: >
+  ICIJ Offshore Leaks database: 800K+ entities from Panama Papers,
+  Paradise Papers, and Pandora Papers. Multi-party offshore ownership
+  structures modeled as hyperedges.
+
+entity_types:
+  - name: entity
+    description: "Offshore company, trust, or foundation"
+    attributes: [name, jurisdiction, incorporation_date, status, countries]
+  - name: officer
+    description: "Individual or company acting as director, shareholder, or beneficiary"
+    attributes: [name, country_codes, countries]
+  - name: intermediary
+    description: "Law firm, bank, or agent facilitating the offshore structure"
+    attributes: [name, country_codes, countries, status]
+  - name: address
+    description: "Registered address of an entity or officer"
+    attributes: [address, country_codes, countries]
+
+relation_types:
+  - name: offshore-structure
+    description: >
+      A single ownership/control structure connecting an offshore entity
+      with its officers, intermediary, and registered addresses.
+      This is naturally N-ary: one entity can have multiple officers,
+      one intermediary, and multiple addresses — all as a single atomic event.
+    roles:
+      - name: offshore-entity
+        entity_types: [entity]
+        required: true
+      - name: officer
+        entity_types: [officer]
+        required: false
+      - name: intermediary
+        entity_types: [intermediary]
+        required: false
+      - name: registered-address
+        entity_types: [address]
+        required: false
+    min_participants: 2
+
+  - name: shared-officer-link
+    description: >
+      When the same officer controls multiple offshore entities —
+      a key indicator of coordinated shell company networks.
+    roles:
+      - name: controlled-entity
+        entity_types: [entity]
+        required: true
+      - name: controlling-officer
+        entity_types: [officer]
+        required: true
+    min_participants: 2
+
+morphism_types:
+  - name: same-network
+    description: "Two offshore structures belong to the same beneficial owner network"
+    source_relation: offshore-structure
+    target_relation: offshore-structure
+  - name: restructuring
+    description: "One structure was dissolved and replaced by another"
+    source_relation: offshore-structure
+    target_relation: offshore-structure

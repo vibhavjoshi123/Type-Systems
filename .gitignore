@@ -1,0 +1,26 @@
+# Data files (downloaded, not committed)
+*.csv
+*.zip
+*.json.gz
+*.txt.gz
+data/
+
+# Results are generated
+# Uncomment to track results in git:
+# !results/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

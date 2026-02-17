@@ -1,0 +1,61 @@
+domain: fda-faers
+description: >
+  FDA Adverse Event Reporting System (FAERS). Each adverse event report
+  is naturally N-ary: Patient + Drug A + Drug B + ... + Reaction + Outcome.
+  This is the canonical case where binary graphs fail — a 3-drug interaction
+  cannot be represented as pairwise edges without losing the "all three
+  together caused this" information.
+
+entity_types:
+  - name: drug
+    description: "Medication involved in the adverse event"
+    attributes: [drug_name, role_code, route, dose_amount, dose_unit]
+  - name: reaction
+    description: "Adverse reaction experienced (MedDRA preferred term)"
+    attributes: [reaction_name, meddra_pt]
+  - name: outcome
+    description: "Patient outcome (death, hospitalization, disability, etc.)"
+    attributes: [outcome_code, outcome_description]
+  - name: indication
+    description: "Medical condition the drug was prescribed for"
+    attributes: [indication_name]
+
+relation_types:
+  - name: adverse-event
+    description: >
+      A single adverse event report connecting ALL drugs the patient was
+      taking, ALL reactions experienced, and the patient outcome.
+      This is one atomic hyperedge — not decomposable into binary edges.
+      A patient on warfarin + aspirin + metformin who experiences GI bleeding
+      is ONE event, not three separate drug-reaction pairs.
+    roles:
+      - name: suspect-drug
+        entity_types: [drug]
+        required: true
+      - name: concomitant-drug
+        entity_types: [drug]
+        required: false
+      - name: reaction
+        entity_types: [reaction]
+        required: true
+      - name: outcome
+        entity_types: [outcome]
+        required: false
+      - name: indication
+        entity_types: [indication]
+        required: false
+    min_participants: 2
+
+morphism_types:
+  - name: same-mechanism
+    description: "Two adverse events share the same pharmacological mechanism"
+    source_relation: adverse-event
+    target_relation: adverse-event
+  - name: dose-escalation
+    description: "Event B occurred after dose increase from Event A's drug"
+    source_relation: adverse-event
+    target_relation: adverse-event
+  - name: contraindication-violation
+    description: "Event B occurred because a known contraindication from Event A was ignored"
+    source_relation: adverse-event
+    target_relation: adverse-event
