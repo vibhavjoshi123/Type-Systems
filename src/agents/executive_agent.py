@@ -23,6 +23,12 @@ from pydantic import BaseModel, Field
 from src.agents.base import AgentQuery, AgentResponse, BaseAgent
 from src.llm.base import BaseLLMConnector
 
+# Avoid circular import — ReplAgent is injected at runtime, not imported.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.agents.repl import ReplAgent
+
 logger = logging.getLogger(__name__)
 
 # Maximum iterations for the hypothesize-verify-refine loop.
@@ -169,9 +175,14 @@ class ExecutiveAgent(BaseAgent):
     - Iterative refinement with feedback
     """
 
-    def __init__(self, llm: BaseLLMConnector | None = None) -> None:
+    def __init__(
+        self,
+        llm: BaseLLMConnector | None = None,
+        repl_agent: ReplAgent | None = None,
+    ) -> None:
         super().__init__()
         self._llm = llm
+        self._repl_agent = repl_agent
 
     @property
     def name(self) -> str:
@@ -279,6 +290,17 @@ class ExecutiveAgent(BaseAgent):
             verification = await self._verify_hypothesis(
                 current_reasoning, entities, hyperedges, paths
             )
+
+            # Step 2b: Code-based verification via REPL (if available)
+            if self._repl_agent:
+                code_result = await self._verify_with_code(
+                    current_reasoning, entities, hyperedges, paths
+                )
+                if code_result is not None:
+                    # Blend code verification with LLM verification
+                    verification = self._blend_verification(
+                        verification, code_result
+                    )
 
             iteration_log.append({
                 "iteration": iteration,
@@ -405,6 +427,81 @@ class ExecutiveAgent(BaseAgent):
                 "analysis based on verification feedback. Address each gap "
                 "and incorporate the suggestions. Be concise and specific."
             ),
+        )
+
+    async def _verify_with_code(
+        self,
+        hypothesis: str,
+        entities: list[object],
+        hyperedges: list[object],
+        paths: list[object],
+    ) -> VerificationResult | None:
+        """Run code-based verification via the REPL agent.
+
+        Delegates to the ReplAgent which generates and executes Python
+        code to programmatically check whether the hypothesis is supported
+        by the actual graph data.
+        """
+        if not self._repl_agent:
+            return None
+
+        try:
+            repl_query = AgentQuery(
+                query=f"Verify: {hypothesis}",
+                context={
+                    "hypothesis": hypothesis,
+                    "entities": entities,
+                    "hyperedges": hyperedges,
+                    "paths": paths,
+                },
+            )
+            response = await self._repl_agent.process(repl_query)
+
+            # Parse the REPL result into a VerificationResult
+            repl_result = response.metadata.get("success", False)
+            evidence = response.evidence[0] if response.evidence else {}
+            return_value = evidence.get("return_value")
+
+            if isinstance(return_value, dict) and "supported" in return_value:
+                return VerificationResult(
+                    is_supported=bool(return_value["supported"]),
+                    confidence=response.confidence,
+                    gaps=return_value.get("checks", []),
+                    suggestions=[return_value.get("findings", "")],
+                )
+
+            # Fallback: use the response confidence as a signal
+            return VerificationResult(
+                is_supported=response.confidence > 0.5,
+                confidence=response.confidence,
+                gaps=[],
+                suggestions=[response.answer] if response.answer else [],
+            )
+
+        except Exception as exc:
+            logger.warning("Code-based verification failed: %s", exc)
+            return None
+
+    @staticmethod
+    def _blend_verification(
+        llm_result: VerificationResult,
+        code_result: VerificationResult,
+    ) -> VerificationResult:
+        """Combine LLM-based and code-based verification results.
+
+        Code verification gets a slight edge since it's deterministic.
+        """
+        blended_confidence = (
+            llm_result.confidence * 0.4 + code_result.confidence * 0.6
+        )
+        combined_gaps = list(llm_result.gaps) + list(code_result.gaps)
+        combined_suggestions = list(llm_result.suggestions) + list(code_result.suggestions)
+
+        return VerificationResult(
+            is_supported=llm_result.is_supported and code_result.is_supported,
+            confidence=round(blended_confidence, 3),
+            gaps=combined_gaps,
+            suggestions=combined_suggestions,
         )
 
     async def _extract_2morphisms(

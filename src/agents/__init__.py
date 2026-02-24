@@ -7,6 +7,7 @@ a well-defined categorical operation:
 - ExecutiveAgent: 2-morphism proposal (iterative reasoning with verification)
 - GovernanceAgent: Coherence verification (diagram commutativity checking)
 - OrchestratorAgent: Dynamic query routing and sub-agent delegation
+- ReplAgent: Sandboxed code execution for hypothesis verification
 """
 
 from src.agents.base import BaseAgent
@@ -14,6 +15,7 @@ from src.agents.context_agent import ContextAgent
 from src.agents.executive_agent import ExecutiveAgent
 from src.agents.governance_agent import GovernanceAgent
 from src.agents.orchestrator import OrchestratorAgent
+from src.agents.repl import ReplAgent, SandboxedREPL
 from src.agents.tools import HypergraphTools
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     "GovernanceAgent",
     "HypergraphTools",
     "OrchestratorAgent",
+    "ReplAgent",
+    "SandboxedREPL",
 ]

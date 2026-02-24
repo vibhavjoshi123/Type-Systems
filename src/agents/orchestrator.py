@@ -24,6 +24,7 @@ from src.agents.base import AgentQuery, AgentResponse, BaseAgent, DelegationRequ
 from src.agents.context_agent import ContextAgent
 from src.agents.executive_agent import ExecutiveAgent
 from src.agents.governance_agent import GovernanceAgent
+from src.agents.repl import ReplAgent
 from src.typedb.traversal import HypergraphTraversal
 
 logger = logging.getLogger(__name__)
@@ -83,15 +84,24 @@ class OrchestratorAgent(BaseAgent):
         self._entities = entities or []
         self._hyperedges = hyperedges or []
 
+        # Create the REPL agent with live graph objects injected
+        self._repl_agent = ReplAgent(llm=llm)
+        self._repl_agent.load_graph_context(
+            traversal=traversal,
+            entities=self._entities,
+            hyperedges=self._hyperedges,
+        )
+
         # Create and register the sub-agents
         self._context_agent = ContextAgent(traversal)
-        self._executive_agent = ExecutiveAgent(llm=llm)
+        self._executive_agent = ExecutiveAgent(llm=llm, repl_agent=self._repl_agent)
         self._governance_agent = GovernanceAgent()
 
         self.register_sub_agents([
             self._context_agent,
             self._executive_agent,
             self._governance_agent,
+            self._repl_agent,
         ])
 
     @property

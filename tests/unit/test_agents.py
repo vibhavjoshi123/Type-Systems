@@ -6,6 +6,8 @@ Covers:
 - ExecutiveAgent iterative reasoning
 - GovernanceAgent coherence verification
 - OrchestratorAgent query routing
+- SandboxedREPL execution and safety
+- ReplAgent code execution and LLM-generated verification
 """
 
 import pytest
@@ -24,6 +26,7 @@ from src.agents.orchestrator import (
     OrchestratorAgent,
     QueryComplexity,
 )
+from src.agents.repl import ExecutionResult, ReplAgent, SandboxedREPL
 from src.models.decisions import DecisionTrace, PrecedentChain
 from src.models.hyperedges import Hyperedge, RoleAssignment
 from src.typedb.traversal import HypergraphTraversal
@@ -436,3 +439,286 @@ class TestOrchestratorAgent:
         assert "context_agent" in orchestrator._agent_registry
         assert "executive_agent" in orchestrator._agent_registry
         assert "governance_agent" in orchestrator._agent_registry
+        assert "repl_agent" in orchestrator._agent_registry
+
+
+# ── SandboxedREPL ─────────────────────────────────────────────────
+
+
+class TestSandboxedREPL:
+    @pytest.mark.asyncio
+    async def test_basic_execution(self):
+        repl = SandboxedREPL()
+        result = await repl.execute("x = 2 + 3")
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_return_value(self):
+        repl = SandboxedREPL()
+        result = await repl.execute("2 + 3")
+        assert result.success is True
+        assert result.return_value == 5
+
+    @pytest.mark.asyncio
+    async def test_state_persists(self):
+        """Variables defined in one execution are available in the next."""
+        repl = SandboxedREPL()
+        await repl.execute("counter = 10")
+        result = await repl.execute("counter + 5")
+        assert result.return_value == 15
+
+    @pytest.mark.asyncio
+    async def test_inject_object(self):
+        repl = SandboxedREPL()
+        repl.inject("data", [1, 2, 3, 4, 5])
+        result = await repl.execute("sum(data)")
+        assert result.return_value == 15
+
+    @pytest.mark.asyncio
+    async def test_inject_live_object(self):
+        """Injected objects are live references, not copies — like Agentica."""
+        repl = SandboxedREPL()
+        entities = [{"name": "Acme"}, {"name": "Globex"}]
+        repl.inject("entities", entities)
+        result = await repl.execute("len(entities)")
+        assert result.return_value == 2
+
+        # Mutate from outside — REPL sees the change (live reference)
+        entities.append({"name": "Initech"})
+        result = await repl.execute("len(entities)")
+        assert result.return_value == 3
+
+    @pytest.mark.asyncio
+    async def test_inject_traversal_object(self):
+        """HypergraphTraversal can be injected and called from sandbox."""
+        traversal = HypergraphTraversal(_sample_hyperedges())
+        repl = SandboxedREPL()
+        repl.inject("traversal", traversal)
+        result = await repl.execute(
+            "components = traversal.find_s_connected_components(2)\n"
+            "len(components)"
+        )
+        assert result.success is True
+        assert result.return_value >= 1
+
+    @pytest.mark.asyncio
+    async def test_stdout_capture(self):
+        repl = SandboxedREPL()
+        result = await repl.execute('print("hello from sandbox")')
+        assert "hello from sandbox" in result.stdout
+
+    @pytest.mark.asyncio
+    async def test_blocked_import(self):
+        repl = SandboxedREPL()
+        result = await repl.execute("import os")
+        assert result.success is False
+        assert "not allowed" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_allowed_import(self):
+        repl = SandboxedREPL()
+        result = await repl.execute("import math\nmath.sqrt(16)")
+        assert result.success is True
+        assert result.return_value == 4.0
+
+    @pytest.mark.asyncio
+    async def test_blocked_builtins(self):
+        repl = SandboxedREPL()
+        result = await repl.execute('open("/etc/passwd")')
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_timeout(self):
+        repl = SandboxedREPL(timeout=0.5)
+        result = await repl.execute("while True: pass")
+        assert result.success is False
+        assert "timed out" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_reset(self):
+        repl = SandboxedREPL()
+        await repl.execute("x = 42")
+        repl.reset()
+        result = await repl.execute("x")
+        assert result.success is False  # x no longer defined
+
+    @pytest.mark.asyncio
+    async def test_history_tracking(self):
+        repl = SandboxedREPL()
+        await repl.execute("1 + 1")
+        await repl.execute("2 + 2")
+        assert len(repl.history) == 2
+
+    @pytest.mark.asyncio
+    async def test_namespace_keys(self):
+        repl = SandboxedREPL()
+        repl.inject("foo", 1)
+        repl.inject("bar", 2)
+        assert "foo" in repl.namespace_keys
+        assert "bar" in repl.namespace_keys
+        assert "__builtins__" not in repl.namespace_keys
+
+    @pytest.mark.asyncio
+    async def test_multiline_code(self):
+        repl = SandboxedREPL()
+        code = """
+results = []
+for i in range(5):
+    results.append(i * 2)
+len(results)
+"""
+        result = await repl.execute(code)
+        assert result.success is True
+        assert result.return_value == 5
+
+
+# ── ReplAgent ─────────────────────────────────────────────────────
+
+
+class TestReplAgent:
+    @pytest.mark.asyncio
+    async def test_direct_code_execution(self):
+        agent = ReplAgent()
+        query = AgentQuery(
+            query="Run code",
+            context={"code": "2 ** 10"},
+        )
+        response = await agent.process(query)
+        assert response.confidence > 0
+        assert "1024" in response.answer
+
+    @pytest.mark.asyncio
+    async def test_direct_code_with_injected_data(self):
+        agent = ReplAgent()
+        agent.load_graph_context(
+            entities=[{"name": "Acme"}, {"name": "Globex"}],
+        )
+        query = AgentQuery(
+            query="Count entities",
+            context={"code": "len(entities)"},
+        )
+        response = await agent.process(query)
+        assert "2" in response.answer
+
+    @pytest.mark.asyncio
+    async def test_traversal_from_repl(self):
+        """ReplAgent can execute code against a live traversal object."""
+        traversal = HypergraphTraversal(_sample_hyperedges())
+        agent = ReplAgent()
+        agent.load_graph_context(traversal=traversal)
+        query = AgentQuery(
+            query="Find components",
+            context={
+                "code": (
+                    "comps = traversal.find_s_connected_components(2)\n"
+                    "result = {'supported': True, 'findings': f'{len(comps)} components', 'checks': []}"
+                ),
+            },
+        )
+        response = await agent.process(query)
+        assert response.success is not False  # metadata check
+        assert response.confidence >= 0.6
+
+    @pytest.mark.asyncio
+    async def test_llm_generated_verification(self):
+        """ReplAgent generates and executes verification code with a mock LLM."""
+
+        class CodeGenLLM:
+            async def complete(self, prompt: str, system_prompt: str | None = None, **kw) -> str:
+                return (
+                    "entity_names = [e.get('name', '') for e in entities]\n"
+                    "result = {'supported': len(entity_names) > 0, "
+                    "'findings': f'Found {len(entity_names)} entities', "
+                    "'checks': entity_names}"
+                )
+
+        agent = ReplAgent(llm=CodeGenLLM())
+        agent.load_graph_context(
+            entities=[{"name": "Acme"}, {"name": "Globex"}],
+            hyperedges=[],
+        )
+        query = AgentQuery(
+            query="Verify entity presence",
+            context={"hypothesis": "Acme and Globex are in the graph"},
+        )
+        response = await agent.process(query)
+        assert response.confidence >= 0.6
+        assert response.metadata.get("mode") == "generated"
+
+    @pytest.mark.asyncio
+    async def test_no_llm_no_code_returns_empty(self):
+        agent = ReplAgent()
+        query = AgentQuery(query="Do something")
+        response = await agent.process(query)
+        assert response.confidence == 0.0
+
+    @pytest.mark.asyncio
+    async def test_failed_code_low_confidence(self):
+        agent = ReplAgent()
+        query = AgentQuery(
+            query="Bad code",
+            context={"code": "undefined_variable + 1"},
+        )
+        response = await agent.process(query)
+        assert response.confidence <= 0.2
+
+    @pytest.mark.asyncio
+    async def test_repl_state_persists_across_calls(self):
+        """Like Agentica: state accumulates across agent invocations."""
+        agent = ReplAgent()
+        await agent.process(AgentQuery(
+            query="Set state",
+            context={"code": "analysis_count = 0"},
+        ))
+        response = await agent.process(AgentQuery(
+            query="Increment",
+            context={"code": "analysis_count += 1\nanalysis_count"},
+        ))
+        assert "1" in response.answer
+
+
+# ── ExecutiveAgent + REPL Integration ─────────────────────────────
+
+
+class TestExecutiveAgentWithREPL:
+    @pytest.mark.asyncio
+    async def test_repl_enhances_verification(self):
+        """ExecutiveAgent uses ReplAgent for code-based verification."""
+
+        class MockLLM:
+            call_count = 0
+
+            async def complete(self, prompt: str, system_prompt: str | None = None, **kw) -> str:
+                self.call_count += 1
+                sp = (system_prompt or "").lower()
+                if "verification" in sp:
+                    return '{"is_supported": true, "confidence": 0.9, "gaps": [], "suggestions": []}'
+                if "extraction" in sp:
+                    return '{"proposals": []}'
+                if "code generation" in sp:
+                    return (
+                        "result = {'supported': True, "
+                        "'findings': 'Entities match', 'checks': []}"
+                    )
+                return "The discount was approved based on strategic value."
+
+        mock_llm = MockLLM()
+        repl_agent = ReplAgent(llm=mock_llm)
+        repl_agent.load_graph_context(
+            entities=[{"name": "Acme"}],
+            hyperedges=[{"decision_type": "discount"}],
+        )
+
+        agent = ExecutiveAgent(llm=mock_llm, repl_agent=repl_agent)
+        query = AgentQuery(
+            query="Why was discount given?",
+            context={
+                "paths": [["d1", "d2"]],
+                "entities": [{"name": "Acme"}],
+                "hyperedges": [{"decision_type": "discount"}],
+                "graph_summary": "1 entity, 1 hyperedge",
+            },
+        )
+        response = await agent.process(query)
+        assert response.confidence >= 0.5
+        assert "reasoning_iterations" in response.metadata
