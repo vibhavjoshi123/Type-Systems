@@ -36,6 +36,8 @@ context-graph-benchmarks/
 │   ├── neo4j_baseline.py    # Same queries in Neo4j (binary edges)
 │   ├── vector_baseline.py   # Same queries with embeddings
 │   └── generate_report.py   # Output comparison tables + charts
+├── research/
+│   └── arcgentica_analysis.md  # REPL agents + recursive delegation reference
 ├── run_all.sh               # One command: download → ingest → benchmark → report
 └── pyproject.toml
 ```
@@ -97,6 +99,27 @@ That's the "any vertical" proof.
 | **Hub nodes** | High-degree entities (key people, drugs, companies) |
 | **2-Morphism chains** | Precedent / override relationships discovered |
 | **Comparison** | Same queries on Neo4j (binary) and vector DB (embeddings) |
+
+## Research References
+
+### [Arcgentica — REPL Agents + Recursive Delegation](research/arcgentica_analysis.md)
+
+Symbolica AI achieved **85.28% on ARC-AGI-2** (SotA) with ~350 lines of Python using
+REPL-based agents with recursive delegation. Their architecture maps directly to our
+multi-agent reasoning layer:
+
+| Arcgentica Concept | Context Graph Equivalent |
+|---|---|
+| REPL Agent with live objects | ExecutiveAgent reasoning over TypeDB graph objects |
+| Recursive delegation (`call_agent()`) | ContextAgent → ExecutiveAgent → GovernanceAgent |
+| `soft_accuracy()` feedback loop | 2-morphism feedback loop (extract → store → richer graph) |
+| Schema-constrained returns | TypeDB schema enforcement (invalid actions structurally impossible) |
+
+Key takeaway: the agentic wrapper **doubles** weaker model performance (Opus 4.5: 28% → 50%).
+The model doesn't get smarter — it gets a better environment to reason in.
+Our hypergraph topology IS that better environment.
+
+Full analysis: [`research/arcgentica_analysis.md`](research/arcgentica_analysis.md)
 
 ## License
 
