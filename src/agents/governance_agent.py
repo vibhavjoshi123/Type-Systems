@@ -25,6 +25,9 @@ class GovernanceAgent(BaseAgent):
     - Recommendation generation for non-compliant decisions
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+
     @property
     def name(self) -> str:
         return "governance_agent"

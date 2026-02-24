@@ -1,7 +1,13 @@
-"""Executive Agent - reasoning and interpretation.
+"""Executive Agent - reasoning and interpretation with iterative verification.
 
 Operates on 2-morphisms: proposes arrows between arrows (meta-relations).
 Types include PRECEDENT, EXCEPTION, GENERALIZATION.
+
+Uses an iterative hypothesize → verify → refine loop:
+1. Form an initial hypothesis about decision relationships
+2. Verify the hypothesis against the graph data
+3. Refine if verification reveals gaps or contradictions
+4. Extract 2-morphism proposals from the verified reasoning
 
 From Higher-Order Reasoning PDF Section 3:
 The Hypothesizer proposes 2-cells - typed connections between decisions.
@@ -19,6 +25,12 @@ from src.llm.base import BaseLLMConnector
 
 logger = logging.getLogger(__name__)
 
+# Maximum iterations for the hypothesize-verify-refine loop.
+MAX_REASONING_ITERATIONS = 3
+
+# Confidence threshold: stop iterating once we reach this.
+CONFIDENCE_THRESHOLD = 0.85
+
 
 class TwoMorphismProposal(BaseModel):
     """A 2-morphism proposed by the LLM from its reasoning."""
@@ -35,6 +47,21 @@ class TwoMorphismExtractionResult(BaseModel):
     """Structured output from the 2-morphism extraction call."""
 
     proposals: list[TwoMorphismProposal] = Field(default_factory=list)
+
+
+class VerificationResult(BaseModel):
+    """Result of verifying a reasoning hypothesis against graph data."""
+
+    is_supported: bool = Field(description="Whether the hypothesis is supported by evidence")
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    gaps: list[str] = Field(
+        default_factory=list,
+        description="Evidence gaps or contradictions found",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="Suggestions for refining the hypothesis",
+    )
 
 
 _EXTRACTION_SYSTEM = (
@@ -73,16 +100,77 @@ If no 2-morphism relationships are found, return {{"proposals": []}}.
 Only propose relationships that are clearly supported by the evidence."""
 
 
+_VERIFICATION_SYSTEM = (
+    "You are a verification engine for enterprise decision reasoning. "
+    "Given a hypothesis and the raw graph evidence, assess whether the "
+    "hypothesis is supported. Identify gaps, contradictions, or missing "
+    "connections. Be specific about what evidence supports or refutes "
+    "each claim."
+)
+
+_VERIFICATION_PROMPT = """Evaluate whether the following reasoning hypothesis is supported
+by the graph evidence.
+
+Hypothesis:
+{hypothesis}
+
+Entities in graph:
+{entities}
+
+Decision hyperedges:
+{hyperedges}
+
+Graph traversal context:
+{paths}
+
+Respond ONLY with valid JSON:
+```json
+{{
+  "is_supported": true/false,
+  "confidence": 0.0-1.0,
+  "gaps": ["list of evidence gaps or contradictions"],
+  "suggestions": ["list of specific refinement suggestions"]
+}}
+```
+"""
+
+_REFINEMENT_PROMPT = """Refine your previous analysis based on verification feedback.
+
+Original query: {query}
+Previous reasoning: {previous_reasoning}
+
+Verification found these issues:
+- Gaps: {gaps}
+- Suggestions: {suggestions}
+
+Graph context:
+{graph_summary}
+
+Entities: {entities}
+Hyperedges: {hyperedges}
+
+Provide a refined analysis that addresses the identified gaps. Be concise and specific."""
+
+
 class ExecutiveAgent(BaseAgent):
     """Agent for mechanistic interpretation and causal reasoning.
+
+    Uses an iterative reasoning loop:
+    1. Generate initial hypothesis (LLM reasoning over graph context)
+    2. Verify the hypothesis against the actual graph data
+    3. Refine if verification reveals gaps (up to MAX_REASONING_ITERATIONS)
+    4. Extract 2-morphism proposals from the final verified reasoning
 
     Capabilities:
     - Causal chain construction from hypergraph paths
     - Decision rationale synthesis
     - 2-morphism proposal (precedent/exception identification)
+    - Self-verification against graph evidence
+    - Iterative refinement with feedback
     """
 
     def __init__(self, llm: BaseLLMConnector | None = None) -> None:
+        super().__init__()
         self._llm = llm
 
     @property
@@ -90,10 +178,11 @@ class ExecutiveAgent(BaseAgent):
         return "executive_agent"
 
     async def process(self, query: AgentQuery) -> AgentResponse:
-        """Synthesize reasoning from context paths.
+        """Synthesize reasoning from context paths with iterative verification.
 
-        Takes paths found by the ContextAgent and produces
-        mechanistic interpretations and decision rationale.
+        Takes paths found by the ContextAgent and produces mechanistic
+        interpretations and decision rationale, verifying each iteration
+        against the graph data before finalizing.
         """
         paths = query.context.get("paths", [])
         entities = query.context.get("entities", [])
@@ -106,48 +195,20 @@ class ExecutiveAgent(BaseAgent):
                 confidence=0.0,
             )
 
-        # If LLM is available, use it for reasoning
+        # If LLM is available, use the iterative reasoning loop
         if self._llm:
             try:
-                prompt = self._build_reasoning_prompt(
+                result = await self._iterative_reason(
                     query.query, paths, entities, hyperedges, graph_summary
                 )
-                answer = await self._llm.complete(
-                    prompt=prompt,
-                    system_prompt=(
-                        "You are an executive reasoning agent for an enterprise "
-                        "hypergraph context graph. You analyze decision traces, "
-                        "entity relationships, and hyperedge connections to "
-                        "construct causal chains explaining how enterprise "
-                        "decisions were made. Be concise and specific."
-                    ),
-                )
-
-                # Extract 2-morphism proposals from the reasoning
-                proposals = await self._extract_2morphisms(answer, hyperedges)
-
-                return AgentResponse(
-                    answer=answer,
-                    evidence=[{
-                        "paths": paths,
-                        "entities": entities,
-                        "hyperedges": hyperedges,
-                    }],
-                    paths_found=len(paths),
-                    confidence=0.8,
-                    metadata={
-                        "two_morphism_proposals": [
-                            p.model_dump() for p in proposals
-                        ],
-                    },
-                )
+                return result
             except Exception as exc:
                 logger.error(
-                    "LLM call failed (%s): %s",
+                    "Iterative reasoning failed (%s): %s",
                     type(exc).__name__,
                     exc,
                 )
-                # Fall through to non-LLM response (confidence=0.3)
+                # Fall through to non-LLM response
 
         # Without LLM, return structured summary
         return AgentResponse(
@@ -163,6 +224,187 @@ class ExecutiveAgent(BaseAgent):
             }],
             paths_found=len(paths),
             confidence=0.3,
+        )
+
+    async def _iterative_reason(
+        self,
+        query: str,
+        paths: list[object],
+        entities: list[object],
+        hyperedges: list[object],
+        graph_summary: str,
+    ) -> AgentResponse:
+        """Run the hypothesize → verify → refine loop.
+
+        Each iteration:
+        1. Generate or refine a reasoning hypothesis
+        2. Verify it against the graph evidence
+        3. If confidence is high enough or iterations exhausted, finalize
+        """
+        assert self._llm is not None
+
+        current_reasoning = ""
+        best_confidence = 0.0
+        best_reasoning = ""
+        iteration_log: list[dict[str, Any]] = []
+
+        for iteration in range(MAX_REASONING_ITERATIONS):
+            # Step 1: Generate or refine hypothesis
+            if iteration == 0:
+                prompt = self._build_reasoning_prompt(
+                    query, paths, entities, hyperedges, graph_summary
+                )
+                current_reasoning = await self._llm.complete(
+                    prompt=prompt,
+                    system_prompt=(
+                        "You are an executive reasoning agent for an enterprise "
+                        "hypergraph context graph. You analyze decision traces, "
+                        "entity relationships, and hyperedge connections to "
+                        "construct causal chains explaining how enterprise "
+                        "decisions were made. Be concise and specific."
+                    ),
+                )
+            else:
+                # Refine based on verification feedback
+                current_reasoning = await self._refine_reasoning(
+                    query,
+                    current_reasoning,
+                    verification,
+                    entities,
+                    hyperedges,
+                    graph_summary,
+                )
+
+            # Step 2: Verify the hypothesis against graph data
+            verification = await self._verify_hypothesis(
+                current_reasoning, entities, hyperedges, paths
+            )
+
+            iteration_log.append({
+                "iteration": iteration,
+                "confidence": verification.confidence,
+                "is_supported": verification.is_supported,
+                "gaps_count": len(verification.gaps),
+            })
+
+            logger.info(
+                "Iteration %d: confidence=%.2f, supported=%s, gaps=%d",
+                iteration,
+                verification.confidence,
+                verification.is_supported,
+                len(verification.gaps),
+            )
+
+            # Track best result
+            if verification.confidence > best_confidence:
+                best_confidence = verification.confidence
+                best_reasoning = current_reasoning
+
+            # Step 3: Check if we can stop
+            if verification.is_supported and verification.confidence >= CONFIDENCE_THRESHOLD:
+                logger.info(
+                    "Reasoning converged at iteration %d (confidence=%.2f)",
+                    iteration,
+                    verification.confidence,
+                )
+                break
+
+            if not verification.gaps and not verification.suggestions:
+                # Nothing to improve on — stop even if below threshold
+                break
+
+        # Use the best reasoning we found across iterations
+        final_reasoning = best_reasoning or current_reasoning
+
+        # Extract 2-morphism proposals from the final reasoning
+        proposals = await self._extract_2morphisms(final_reasoning, hyperedges)
+
+        return AgentResponse(
+            answer=final_reasoning,
+            evidence=[{
+                "paths": paths,
+                "entities": entities,
+                "hyperedges": hyperedges,
+            }],
+            paths_found=len(paths),
+            confidence=best_confidence,
+            metadata={
+                "two_morphism_proposals": [p.model_dump() for p in proposals],
+                "reasoning_iterations": len(iteration_log),
+                "iteration_log": iteration_log,
+                "verified": best_confidence >= CONFIDENCE_THRESHOLD,
+            },
+        )
+
+    async def _verify_hypothesis(
+        self,
+        hypothesis: str,
+        entities: list[object],
+        hyperedges: list[object],
+        paths: list[object],
+    ) -> VerificationResult:
+        """Verify a reasoning hypothesis against graph evidence.
+
+        Asks the LLM to act as a critic: does the evidence actually
+        support the claims in the hypothesis?
+        """
+        if not self._llm:
+            return VerificationResult(is_supported=True, confidence=0.5)
+
+        try:
+            prompt = _VERIFICATION_PROMPT.format(
+                hypothesis=hypothesis,
+                entities=entities,
+                hyperedges=hyperedges,
+                paths=paths,
+            )
+            raw = await self._llm.complete(
+                prompt=prompt,
+                system_prompt=_VERIFICATION_SYSTEM,
+            )
+
+            text = raw.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:])
+                if text.endswith("```"):
+                    text = text[:-3].strip()
+
+            return VerificationResult.model_validate_json(text)
+
+        except Exception as exc:
+            logger.warning("Verification failed: %s", exc)
+            # If verification itself fails, assume moderate confidence
+            return VerificationResult(is_supported=True, confidence=0.5)
+
+    async def _refine_reasoning(
+        self,
+        query: str,
+        previous_reasoning: str,
+        verification: VerificationResult,
+        entities: list[object],
+        hyperedges: list[object],
+        graph_summary: str,
+    ) -> str:
+        """Refine reasoning based on verification feedback."""
+        assert self._llm is not None
+
+        prompt = _REFINEMENT_PROMPT.format(
+            query=query,
+            previous_reasoning=previous_reasoning,
+            gaps="; ".join(verification.gaps) if verification.gaps else "None",
+            suggestions="; ".join(verification.suggestions) if verification.suggestions else "None",
+            graph_summary=graph_summary,
+            entities=entities,
+            hyperedges=hyperedges,
+        )
+        return await self._llm.complete(
+            prompt=prompt,
+            system_prompt=(
+                "You are an executive reasoning agent refining a previous "
+                "analysis based on verification feedback. Address each gap "
+                "and incorporate the suggestions. Be concise and specific."
+            ),
         )
 
     async def _extract_2morphisms(
