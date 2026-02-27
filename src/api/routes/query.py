@@ -49,6 +49,8 @@ class QueryResponse(BaseModel):
     two_morphisms_proposed: int = 0
     two_morphisms_stored: int = 0
     routing_strategy: str = ""
+    sub_agents_spawned: int = 0
+    spawn_log: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ── Per-type queries for full attributes ────────────────────────────
@@ -296,6 +298,8 @@ async def query_context_graph(
 
     routing = response.metadata.get("routing", {})
 
+    spawn_log = routing.get("spawn_log", [])
+
     return QueryResponse(
         answer=response.answer,
         evidence=response.evidence,
@@ -304,4 +308,6 @@ async def query_context_graph(
         two_morphisms_proposed=len(proposals),
         two_morphisms_stored=stored,
         routing_strategy=routing.get("strategy", ""),
+        sub_agents_spawned=routing.get("sub_agents_spawned", len(spawn_log)),
+        spawn_log=spawn_log,
     )
