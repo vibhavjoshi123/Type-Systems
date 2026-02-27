@@ -46,12 +46,26 @@ See **[EXAMPLES.md](EXAMPLES.md)** for a full walkthrough with seed data, 2-morp
                     │   Database        │
                     └─────────┬─────────┘
                               │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-┌───────▼───────┐    ┌───────▼───────┐    ┌───────▼───────┐
-│ ContextAgent  │    │ExecutiveAgent │    │GovernanceAgent│
-│ (Traversal)   │    │ (Reasoning)   │    │ (Compliance)  │
-└───────────────┘    └───────────────┘    └───────────────┘
+                    ┌─────────▼─────────┐
+                    │  OrchestratorAgent│  ◄── Unified REPL-based routing
+                    │  (REPL + Spawner) │
+                    └─────────┬─────────┘
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+┌─────────▼──────┐  ┌───────▼───────┐  ┌───────▼───────┐
+│ ContextAgent   │  │ExecutiveAgent │  │GovernanceAgent│
+│ (Traversal)    │  │ (Reasoning)   │  │ (Compliance)  │
+└────────────────┘  └───────────────┘  └───────────────┘
+          │
+          │  spawn_agent() — LLM-generated code
+          ▼
+┌─────────────────────────────────────────────────────┐
+│              SandboxedREPL + AgentSpawner            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
+│  │Sub-Agent │  │Sub-Agent │  │Sub-Agent │  ···       │
+│  │(Acme)    │  │(Globex)  │  │(Initech) │           │
+│  └──────────┘  └──────────┘  └──────────┘           │
+└─────────────────────────────────────────────────────┘
 ```
 
 ## Features
@@ -60,8 +74,13 @@ See **[EXAMPLES.md](EXAMPLES.md)** for a full walkthrough with seed data, 2-morp
 - **Enterprise Connectors**: Salesforce, Zendesk, Slack, PagerDuty, Snowflake
 - **LLM Integration**: Anthropic Claude, OpenAI GPT-4, Together AI
 - **Entity Extraction**: LLM-powered extraction pipeline
-- **Multi-Agent Reasoning**: Context, Executive, and Governance agents
+- **Multi-Agent Reasoning**: Context, Executive, Governance, and Orchestrator agents
 - **Path Finding**: BFS and Yen's K-shortest paths with intersection constraints
+- **Sandboxed REPL**: Persistent Python execution environment for hypothesis verification
+- **Emergent Sub-Agent Spawning**: LLM writes code that calls `spawn_agent()` to delegate subtasks — depth and width determined autonomously at runtime, not pre-programmed
+- **Unified Routing**: All queries go through one REPL-based path; LLM decides whether to answer inline or fan out to sub-agents
+- **Live Object Passing**: Sub-agents receive live Python objects (entities, hyperedges, traversal) by reference — no serialization overhead
+- **Recursive Delegation**: Sub-agents can spawn their own sub-agents up to configurable depth, with isolated context per level to prevent context rot
 
 ## Quick Start
 
@@ -161,11 +180,75 @@ curl -X POST http://localhost:8000/api/v1/query \
 
 The `/api/v1/query` endpoint executes the full multi-agent pipeline:
 
-1. **TypeDB Cloud** — Fetches 16 entities with full attributes and 6 decision hyperedges with rationale, role players, and existing 2-morphisms
-2. **ContextAgent** — Runs s-adjacency traversal (IS >= 2) over real hyperedge objects, finds s-connected components
-3. **ExecutiveAgent** — Sends the full graph context to Claude for mechanistic reasoning
-4. **2-Morphism Extraction** — Claude identifies precedent/exception patterns between decisions
-5. **TypeDB Writeback** — New 2-morphisms stored back to TypeDB (with deduplication)
+1. **TypeDB Cloud** — Fetches 16 entities with full attributes and 6+ decision hyperedges with rationale, role players, and existing 2-morphisms
+2. **OrchestratorAgent** — Injects a `SandboxedREPL` and `AgentSpawner` into the pipeline; asks the LLM to write routing code
+3. **REPL Execution** — LLM-generated Python code runs in a sandboxed environment with access to live graph objects
+4. **Emergent Spawning** — For complex queries, the routing code calls `spawn_agent(task, **objects)` to fan out to focused sub-agents; each sub-agent gets its own REPL and LLM connector with only the relevant data slice
+5. **Synthesis** — The routing agent receives all sub-agent results and synthesizes a final answer with averaged confidence
+6. **2-Morphism Extraction** — Claude identifies precedent/exception patterns between decisions
+7. **TypeDB Writeback** — New 2-morphisms stored back to TypeDB (with deduplication)
+
+**Fallback**: If REPL routing fails or returns low confidence, the pipeline falls back to the classic ContextAgent → ExecutiveAgent path.
+
+## Emergent Sub-Agent Spawning
+
+The system uses a sandboxed Python REPL as the agent execution engine. Rather than hard-coding which agents run in which order, the LLM writes code that decides decomposition at runtime.
+
+### How it works
+
+```python
+# LLM-generated routing code (runs inside SandboxedREPL):
+
+customers = [e for e in entities if e.get('etype') == 'customer']
+results = []
+
+for customer in customers:
+    r = spawn_agent(
+        f"Analyse {customer['name']}: decisions, risk, key decision makers",
+        entity=customer,
+        hyperedges=hyperedges,
+    )
+    results.append(r)
+
+result = {
+    'answer': '\n'.join(r['answer'] for r in results),
+    'confidence': sum(r['confidence'] for r in results) / len(results),
+}
+```
+
+Each `spawn_agent()` call:
+1. Creates a fresh `SandboxedREPL` with only the passed objects in scope
+2. Spawns a new thread with its own event loop (no shared async state)
+3. Creates a fresh LLM connector for the child (avoids event-loop conflicts)
+4. Runs the child agent with analysis-mode prompts that know the correct entity dict keys
+5. Returns `{'answer': str, 'confidence': float, 'result': any}` synchronously to the routing code
+
+### Key properties
+
+| Property | Detail |
+|---|---|
+| **Emergent depth/width** | LLM decides to go wide (fan-out) or deep (sequential spawns) based on the query |
+| **Live object passing** | Python objects passed by reference — no serialization, no latency |
+| **Isolated context** | Each sub-agent sees only what was explicitly passed — prevents context rot |
+| **Recursive** | Sub-agents can call `spawn_agent()` themselves, up to depth 4 |
+| **Thread-safe** | Each spawn gets its own thread + event loop + LLM connector |
+| **Timeout** | Routing REPL has 180s timeout; default execution REPL has 10s |
+
+### API response fields
+
+```json
+{
+  "answer": "...",
+  "confidence": 0.8,
+  "routing_strategy": "repl",
+  "sub_agents_spawned": 3,
+  "spawn_log": [
+    {"task": "Analyse Acme Corp...", "objects_passed": ["entity","hyperedges"], "confidence": 0.8},
+    {"task": "Analyse Globex Industries...", "objects_passed": ["entity","hyperedges"], "confidence": 0.8},
+    {"task": "Analyse Initech Solutions...", "objects_passed": ["entity","hyperedges"], "confidence": 0.8}
+  ]
+}
+```
 
 **Seed data:** 16 entities (3 customers, 4 employees, 3 deals, 3 tickets, 3 policies), 6 interconnected decisions, 4 explicit 2-morphisms (2 precedent-chains + 2 exception-overrides).
 
@@ -204,7 +287,14 @@ hypergraph-context-graph/
 │   ├── connectors/       # Enterprise data connectors
 │   ├── llm/              # LLM provider integrations
 │   ├── extraction/       # Entity extraction pipeline
-│   ├── agents/           # Multi-agent reasoning system
+│   ├── agents/
+│   │   ├── base.py           # BaseAgent + recursive delegation
+│   │   ├── context_agent.py  # s-adjacency graph traversal
+│   │   ├── executive_agent.py# Iterative LLM reasoning + verification
+│   │   ├── governance_agent.py# 2-morphism coherence checking
+│   │   ├── orchestrator.py   # Unified REPL-based routing (all queries)
+│   │   ├── repl.py           # SandboxedREPL, ReplAgent, AgentSpawner
+│   │   └── tools.py          # HypergraphTools
 │   ├── api/              # FastAPI application
 │   └── models/           # Pydantic data models
 ├── tests/
@@ -241,7 +331,11 @@ See [REQUIREMENTS_COVERAGE.md](REQUIREMENTS_COVERAGE.md) for a detailed comparis
 - [x] Phase 4: Multi-Agent System (Context, Executive, Governance agents)
 - [x] Phase 5: End-to-End Pipeline (TypeDB Cloud + Claude API + FastAPI)
 - [x] Phase 6a: LLM-to-2-morphism translation (feedback loop)
-- [ ] Phase 6b: Rich-club analysis, scale-free topology
+- [x] Phase 6b: Sandboxed REPL for agent code execution
+- [x] Phase 6c: Emergent sub-agent spawning via `spawn_agent()` in REPL code
+- [x] Phase 6d: Unified REPL-based routing (one path for all queries)
+- [x] Phase 6e: Recursive delegation with isolated context per sub-agent
+- [ ] Phase 6f: Rich-club analysis, scale-free topology
 - [ ] Phase 7: Production Deployment (K8s, monitoring, load testing)
 
 ## References
