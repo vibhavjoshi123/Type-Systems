@@ -1,26 +1,19 @@
-"""Orchestrator Agent - dynamic query routing and decomposition.
+"""Orchestrator Agent - unified REPL-based query routing.
 
-Instead of running every query through the same fixed pipeline
-(ContextAgent → ExecutiveAgent → store), the orchestrator inspects
-the query and graph state to decide the execution strategy:
+All queries go through the same REPL-based routing path: the LLM writes
+code that can optionally call spawn_agent() to delegate subtasks, then
+synthesises results. No pre-classification into simple/standard/complex.
 
-- Simple lookups skip the LLM entirely
-- Multi-entity queries fan out to per-entity sub-agents
-- Deep analysis queries iterate with verification
-- Governance checks are triggered when decision traces are involved
-
-This replaces the rigid 3-step pipeline with adaptive routing.
+Falls back to a ContextAgent → ExecutiveAgent pipeline if REPL routing
+fails or produces a low-confidence answer.
 """
 
 from __future__ import annotations
 
 import logging
-from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
-
-from src.agents.base import AgentQuery, AgentResponse, BaseAgent, DelegationRequest
+from src.agents.base import AgentQuery, AgentResponse, BaseAgent
 from src.agents.context_agent import ContextAgent
 from src.agents.executive_agent import ExecutiveAgent
 from src.agents.governance_agent import GovernanceAgent
@@ -29,46 +22,23 @@ from src.typedb.traversal import HypergraphTraversal
 
 logger = logging.getLogger(__name__)
 
-
-class QueryComplexity(StrEnum):
-    """Classified complexity of an incoming query."""
-
-    SIMPLE = "simple"       # Direct lookup, no LLM needed
-    STANDARD = "standard"   # Single-pass reasoning
-    COMPLEX = "complex"     # Multi-entity or deep analysis, benefits from delegation
-
-
-class QueryClassification(BaseModel):
-    """Result of classifying a query's complexity and routing needs."""
-
-    complexity: QueryComplexity
-    entity_mentions: list[str] = Field(default_factory=list)
-    needs_governance: bool = False
-    reason: str = ""
-
-
 # Keywords that signal governance/compliance review is needed.
 _GOVERNANCE_KEYWORDS = frozenset({
     "compliance", "compliant", "violation", "audit", "coherent",
     "coherence", "policy", "override", "exception", "risk",
 })
 
-# Keywords that signal a simple lookup rather than deep analysis.
-_LOOKUP_KEYWORDS = frozenset({
-    "list", "show", "get", "what is", "who is", "how many", "count",
-})
-
 
 class OrchestratorAgent(BaseAgent):
-    """Dynamically routes queries based on complexity analysis.
+    """Routes every query through REPL-based emergent reasoning.
 
-    Execution strategies:
-    - SIMPLE: ContextAgent only — return graph structure data directly
-    - STANDARD: ContextAgent → ExecutiveAgent (iterative reasoning)
-    - COMPLEX: Fan out to per-entity sub-agents, then synthesize
+    The LLM writes code that inspects the live graph data and decides
+    autonomously how to answer — directly, or by spawning focused
+    sub-agents via spawn_agent(). This replaces pre-programmed
+    routing logic with LLM-driven decomposition.
 
-    Also triggers GovernanceAgent when compliance-related keywords
-    are detected or when decision traces are present in the context.
+    GovernanceAgent is triggered when compliance-related keywords are
+    detected or when decision traces are present in the context.
     """
 
     def __init__(
@@ -92,7 +62,7 @@ class OrchestratorAgent(BaseAgent):
             hyperedges=self._hyperedges,
         )
 
-        # Create and register the sub-agents
+        # Sub-agents used in the fallback pipeline
         self._context_agent = ContextAgent(traversal)
         self._executive_agent = ExecutiveAgent(llm=llm, repl_agent=self._repl_agent)
         self._governance_agent = GovernanceAgent()
@@ -108,154 +78,19 @@ class OrchestratorAgent(BaseAgent):
     def name(self) -> str:
         return "orchestrator"
 
-    def classify_query(self, query: AgentQuery) -> QueryClassification:
-        """Analyze the query to determine routing strategy.
-
-        Inspects the query text and available context to decide between
-        simple lookup, standard reasoning, or complex fan-out.
-        """
-        q_lower = query.query.lower()
-
-        # Check for governance keywords
-        needs_governance = any(kw in q_lower for kw in _GOVERNANCE_KEYWORDS)
-
-        # Count entity mentions by checking which known entity names appear
-        entity_mentions: list[str] = []
-        for entity in self._entities:
-            ename = ""
-            # Handle different entity dict formats
-            for key in ("name", "entity-name", "entity_name", "ename"):
-                if key in entity:
-                    ename = str(entity[key])
-                    break
-            if ename and ename.lower() in q_lower:
-                entity_mentions.append(ename)
-
-        # Classify complexity
-        if any(kw in q_lower for kw in _LOOKUP_KEYWORDS) and not entity_mentions:
-            complexity = QueryComplexity.SIMPLE
-            reason = "Query matches lookup pattern with no specific entity references"
-        elif len(entity_mentions) >= 3:
-            complexity = QueryComplexity.COMPLEX
-            reason = f"Query mentions {len(entity_mentions)} entities: {entity_mentions}"
-        elif needs_governance and len(entity_mentions) >= 2:
-            complexity = QueryComplexity.COMPLEX
-            reason = f"Governance query spanning {len(entity_mentions)} entities"
-        else:
-            complexity = QueryComplexity.STANDARD
-            reason = "Standard single-pass reasoning"
-
-        return QueryClassification(
-            complexity=complexity,
-            entity_mentions=entity_mentions,
-            needs_governance=needs_governance,
-            reason=reason,
-        )
-
     async def process(self, query: AgentQuery) -> AgentResponse:
-        """Route and execute the query based on complexity classification."""
-        classification = self.classify_query(query)
-
-        logger.info(
-            "Query classified as %s: %s",
-            classification.complexity,
-            classification.reason,
+        """Route query through REPL-based reasoning with optional governance."""
+        needs_governance = any(
+            kw in query.query.lower() for kw in _GOVERNANCE_KEYWORDS
         )
 
-        if classification.complexity == QueryComplexity.SIMPLE:
-            return await self._handle_simple(query, classification)
-        elif classification.complexity == QueryComplexity.COMPLEX:
-            return await self._handle_complex(query, classification)
-        else:
-            return await self._handle_standard(query, classification)
-
-    async def _handle_simple(
-        self,
-        query: AgentQuery,
-        classification: QueryClassification,
-    ) -> AgentResponse:
-        """Simple lookup: just run the ContextAgent, skip LLM."""
-        response = await self.delegate(
-            "context_agent",
-            query,
-            rationale="Simple lookup — graph traversal only",
-        )
-
-        if response is None:
-            # Fallback: run directly
-            response = await self._context_agent.process(query)
-
-        response.metadata["routing"] = {
-            "strategy": "simple",
-            "reason": classification.reason,
-        }
-        return response
-
-    async def _handle_standard(
-        self,
-        query: AgentQuery,
-        classification: QueryClassification,
-    ) -> AgentResponse:
-        """Standard pipeline: ContextAgent → ExecutiveAgent, with optional governance."""
-        # Step 1: Get graph context
-        context_response = await self._context_agent.process(query)
-
-        # Step 2: Run executive reasoning with the context
-        exec_query = AgentQuery(
-            query=query.query,
-            context={
-                "paths": context_response.evidence,
-                "entities": self._entities,
-                "hyperedges": self._hyperedges,
-                "graph_summary": context_response.answer,
-            },
-            intersection_size=query.intersection_size,
-            max_depth=query.max_depth,
-        )
-        exec_response = await self.delegate(
-            "executive_agent",
-            exec_query,
-            rationale="Standard reasoning over graph context",
-        )
-
-        if exec_response is None:
-            exec_response = await self._executive_agent.process(exec_query)
-
-        # Step 3: Optional governance check
-        governance_response = None
-        if classification.needs_governance:
-            governance_response = await self._run_governance(exec_response)
-
-        return self._build_response(
-            exec_response,
-            context_response,
-            governance_response,
-            strategy="standard",
-            reason=classification.reason,
-        )
-
-    async def _handle_complex(
-        self,
-        query: AgentQuery,
-        classification: QueryClassification,
-    ) -> AgentResponse:
-        """Complex query: LLM decides how to decompose via REPL + spawn_agent.
-
-        Rather than pre-programming which sub-agents to call and in what order,
-        we inject a ``spawn_agent`` callable into the REPL and let the LLM write
-        code that decides decomposition autonomously — it can fan out (width),
-        go deep (sequential spawns), or mix both.
-
-        Falls back to a single traversal pass if REPL routing fails.
-        """
-        # Inject spawner so the LLM's code can delegate subtasks
+        # Inject a fresh spawner so LLM code can delegate subtasks
         spawner = AgentSpawner(llm=self._llm, depth=self._delegation_depth)
         self._repl_agent.repl.inject("spawn_agent", spawner)
 
-        # Build the routing task and attempt REPL-based decomposition
+        # Build the routing task prompt
         routing_task = _ROUTING_PROMPT.format(
             query=query.query,
-            entity_mentions=classification.entity_mentions or "none detected",
             n_entities=len(self._entities),
             n_hyperedges=len(self._hyperedges),
         )
@@ -272,16 +107,15 @@ class OrchestratorAgent(BaseAgent):
             except Exception as exc:
                 logger.warning("REPL routing failed, falling back: %s", exc)
 
-        # If REPL routing produced a meaningful answer, use it
+        # Use REPL result if it produced a meaningful answer
         if repl_response and repl_response.confidence > 0.1:
             governance_response = None
-            if classification.needs_governance:
+            if needs_governance:
                 governance_response = await self._run_governance(repl_response)
 
             metadata = dict(repl_response.metadata)
             metadata["routing"] = {
-                "strategy": "complex",
-                "reason": classification.reason,
+                "strategy": "repl",
                 "sub_agents_spawned": len(spawner.spawn_log),
                 "spawn_log": spawner.spawn_log,
             }
@@ -303,8 +137,8 @@ class OrchestratorAgent(BaseAgent):
                 metadata=metadata,
             )
 
-        # Fallback: single traversal pass through executive agent
-        logger.info("Falling back to single traversal for complex query")
+        # Fallback: ContextAgent → ExecutiveAgent pipeline
+        logger.info("REPL routing produced low confidence, falling back to pipeline")
         context_response = await self._context_agent.process(query)
         exec_query = AgentQuery(
             query=query.query,
@@ -318,17 +152,16 @@ class OrchestratorAgent(BaseAgent):
             max_depth=query.max_depth,
         )
         exec_response = await self._executive_agent.process(exec_query)
+
         governance_response = None
-        if classification.needs_governance:
+        if needs_governance:
             governance_response = await self._run_governance(exec_response)
 
         return self._build_response(
             exec_response,
             context_response,
             governance_response,
-            strategy="complex",
-            reason=classification.reason + " (fallback)",
-            fan_out_count=len(classification.entity_mentions),
+            strategy="fallback",
         )
 
     async def _run_governance(
@@ -340,7 +173,6 @@ class OrchestratorAgent(BaseAgent):
         if not proposals:
             return None
 
-        # Build traces from proposals for governance checking
         from src.models.decisions import DecisionTrace, PrecedentChain
 
         trace = DecisionTrace(
@@ -373,24 +205,15 @@ class OrchestratorAgent(BaseAgent):
         context_response: AgentResponse | None,
         governance_response: AgentResponse | None,
         strategy: str,
-        reason: str,
-        fan_out_count: int = 0,
     ) -> AgentResponse:
-        """Combine agent responses into a single orchestrated response."""
+        """Combine fallback pipeline responses into a single response."""
         answer = exec_response.answer
 
-        # Append governance findings if relevant
         if governance_response and governance_response.metadata.get("compliant") is False:
-            answer += (
-                f"\n\n[Governance Warning] {governance_response.answer}"
-            )
+            answer += f"\n\n[Governance Warning] {governance_response.answer}"
 
         metadata = dict(exec_response.metadata)
-        metadata["routing"] = {
-            "strategy": strategy,
-            "reason": reason,
-            "fan_out_count": fan_out_count,
-        }
+        metadata["routing"] = {"strategy": strategy}
 
         if governance_response:
             metadata["governance"] = {

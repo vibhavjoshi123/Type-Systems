@@ -272,9 +272,9 @@ def _is_serializable(obj: Any) -> bool:
 # ── Code generation prompts ───────────────────────────────────────
 
 _CODE_GEN_SYSTEM = (
-    "You are a code generation engine for verifying hypotheses against "
-    "enterprise hypergraph data. You write concise Python code that checks "
-    "claims programmatically. Variables available in the sandbox:\n"
+    "You are a code generation engine for analysing enterprise hypergraph data. "
+    "You write concise Python code that explores graph data and answers questions "
+    "programmatically. Variables available in the sandbox:\n"
     "- `entities`: list[dict] — entity records with 'name', 'entity_id', etc.\n"
     "- `hyperedges`: list[dict] — decision events with 'decision_type', 'rationale', role players\n"
     "- `traversal`: HypergraphTraversal — call .find_s_connected_components(s), "
@@ -284,44 +284,75 @@ _CODE_GEN_SYSTEM = (
     "  returns dict with 'answer' (str), 'confidence' (float), 'result' (any).\n"
     "  Example: r = spawn_agent('count decisions for Acme', entities=entities)\n\n"
     "Not all variables may be present — use only what exists in scope. "
+    "Confidence should reflect how complete your analysis is (0.7–0.9 for solid findings, "
+    "0.5–0.7 for partial data). "
     "Output ONLY valid Python code, no markdown fences, no explanation. "
-    "Store your final answer in a variable called `result`."
+    "Store your final answer in `result` as: {'answer': str, 'confidence': float}."
 )
 
 # ── Routing/synthesis prompts (used by OrchestratorAgent) ─────────
 
 _ROUTING_SYSTEM = (
-    "You are a routing and synthesis agent for an enterprise decision hypergraph. "
-    "You have live graph data and can spawn focused sub-agents for subtasks.\n\n"
-    "Available in scope:\n"
-    "- `spawn_agent(task, **objects)` — spawn a sub-agent with live object access;\n"
-    "  returns dict with 'answer' (str), 'confidence' (float), 'result' (any).\n"
-    "- `entities` — list of all entity dicts\n"
-    "- `hyperedges` — list of decision event dicts\n"
-    "- `traversal` — HypergraphTraversal for graph operations\n\n"
-    "Decompose the query, spawn sub-agents for each part, then synthesize.\n"
-    "Example:\n"
-    "  r1 = spawn_agent('Analyze decisions for Acme Corp', "
-    "entities=entities, hyperedges=hyperedges)\n"
-    "  r2 = spawn_agent('Find connections between Acme and Globex', "
-    "traversal=traversal, hyperedges=hyperedges)\n"
-    "  result = {'answer': r1['answer'] + '\\n' + r2['answer'], "
-    "'confidence': (r1['confidence'] + r2['confidence']) / 2}\n\n"
-    "Output ONLY valid Python code, no markdown fences, no explanation. "
-    "Store the synthesized answer in `result` as: {'answer': str, 'confidence': float}."
+    "You are a routing and synthesis agent for an enterprise decision hypergraph.\n\n"
+    "SCOPE (always available):\n"
+    "- entities: list[dict]  — keys: id, name, etype (+ type fields like arr, tier)\n"
+    "- hyperedges: list[dict] — keys: dt (decision type), rat (rationale),\n"
+    "    role_players (list of {pid, pname, _role})\n"
+    "- traversal: HypergraphTraversal\n"
+    "- spawn_agent(task, **objects) — delegates subtask to a fresh sub-agent;\n"
+    "    returns dict: {answer: str, confidence: float, result: any}\n\n"
+    "STRATEGY:\n"
+    "1. For simple questions: analyse entities/hyperedges directly and set result.\n"
+    "2. For multi-entity questions: spawn one sub-agent per entity/topic, then\n"
+    "   synthesize: result = {'answer': '\\n'.join(r['answer'] for r in results), \n"
+    "   'confidence': sum(r['confidence'] for r in results)/len(results)}\n\n"
+    "Always use .get() for dict access. Output ONLY valid Python, no markdown.\n"
+    "Always set: result = {'answer': str, 'confidence': float}"
 )
 
-_ROUTING_PROMPT = """Decompose and analyze this query by spawning focused sub-agents.
+_ROUTING_PROMPT = """Analyze the graph data to answer this query. You can answer directly using
+the injected data, or spawn focused sub-agents for subtasks if helpful.
 
 Query: {query}
 
-Entity mentions detected: {entity_mentions}
 Total entities available: {n_entities}
 Total decision hyperedges: {n_hyperedges}
 
-Use spawn_agent() to delegate focused subtasks to sub-agents that each receive only
-the relevant data they need. Then synthesize their results into a final answer.
-Store the final synthesized answer in `result` as a dict with 'answer' and 'confidence'.
+Inspect `entities` and `hyperedges` to understand the data. For complex queries,
+use spawn_agent() to delegate subtasks and synthesize the results.
+Store the final answer in `result` as: {{'answer': str, 'confidence': float}}.
+"""
+
+_ANALYSIS_CODE_GEN_SYSTEM = (
+    "You are a data analysis engine for enterprise hypergraph data. "
+    "Write Python code to explore injected data and answer the question.\n\n"
+    "ENTITY DICT KEYS (use exactly these):\n"
+    "  id, name, etype  (plus type-specific fields like 'arr', 'tier', etc.)\n\n"
+    "HYPEREDGE DICT KEYS:\n"
+    "  dt (decision type str), rat (rationale str),\n"
+    "  role_players (list of dicts: pid, pname, _role)\n\n"
+    "SAFE PATTERNS:\n"
+    "  entity_names = [e.get('name','?') for e in entities]\n"
+    "  for h in hyperedges:\n"
+    "      players = [p.get('pname','') for p in h.get('role_players', [])]\n\n"
+    "Always use .get() to access dict keys — never direct indexing.\n"
+    "`spawn_agent(task, **objects)` is available for subtasks.\n\n"
+    "Output ONLY valid Python code, no markdown, no explanation.\n"
+    "Always set: result = {'answer': str, 'confidence': float}\n"
+    "confidence: 0.7-0.9 for solid findings, 0.5-0.7 for partial data.\n"
+    "If data is empty: result = {'answer': 'No relevant data found.', 'confidence': 0.3}"
+)
+
+_ANALYSIS_CODE_GEN_PROMPT = """Write Python code to answer this question using the injected objects.
+
+Task: {task}
+
+Injected variables available: {injected_objects}
+
+Analyse the data, find relevant facts, and always set `result`:
+  result = {{'answer': 'your clear findings here', 'confidence': 0.8}}
+
+Use .get() for all dict access. Handle empty lists gracefully.
 """
 
 _CODE_GEN_PROMPT = """Write Python code to verify this hypothesis against the graph data.
@@ -399,7 +430,12 @@ class ReplAgent(BaseAgent):
         if code:
             return await self._execute_and_respond(code, mode="direct")
 
-        # Mode 2: LLM-generated verification code
+        # Mode 2: Analysis mode — spawned sub-agents use data-analysis prompts
+        # with correct entity dict key documentation to avoid KeyError.
+        if query.context.get("mode") == "analysis" and self._llm:
+            return await self._analyse_with_code(query.query, query)
+
+        # Mode 3: LLM-generated verification code (hypothesis checking)
         hypothesis = query.context.get("hypothesis", query.query)
         if self._llm:
             return await self._verify_with_code(hypothesis, query)
@@ -408,6 +444,47 @@ class ReplAgent(BaseAgent):
         return AgentResponse(
             answer="ReplAgent requires either code in context or an LLM for code generation.",
             confidence=0.0,
+        )
+
+    async def _analyse_with_code(
+        self, task: str, query: AgentQuery
+    ) -> AgentResponse:
+        """Generate analysis code for a spawned sub-agent task, then execute it.
+
+        Uses analysis-oriented prompts that document the correct entity dict
+        keys ('id', 'name', 'etype') so LLM-generated code doesn't hit KeyError.
+        """
+        assert self._llm is not None
+
+        injected_objects = query.context.get("injected_objects", list(self._repl.namespace_keys))
+
+        prompt = _ANALYSIS_CODE_GEN_PROMPT.format(
+            task=task,
+            injected_objects=", ".join(injected_objects) if injected_objects else "see namespace",
+        )
+
+        try:
+            generated_code = await self._llm.complete(
+                prompt=prompt,
+                system_prompt=_ANALYSIS_CODE_GEN_SYSTEM,
+            )
+        except Exception as exc:
+            logger.warning("Analysis code generation failed: %s", exc)
+            return AgentResponse(
+                answer=f"Failed to generate analysis code: {exc}",
+                confidence=0.0,
+                metadata={"mode": "analysis_failed", "error": str(exc)},
+            )
+
+        code = generated_code.strip()
+        if code.startswith("```"):
+            lines = code.split("\n")
+            code = "\n".join(lines[1:])
+            if code.endswith("```"):
+                code = code[:-3].strip()
+
+        return await self._execute_and_respond(
+            code, mode="analysis", generated_code=code
         )
 
     async def _verify_with_code(
@@ -453,12 +530,21 @@ class ReplAgent(BaseAgent):
             code, mode="generated", generated_code=code
         )
 
+    # Timeout (seconds) for routing code that may call spawn_agent().
+    # Each spawn_agent call involves thread creation + LLM round-trip (≈15–30 s),
+    # so the routing sandbox needs a much longer window than the default 10 s.
+    _ROUTING_TIMEOUT = 180
+
     async def route_with_code(self, routing_task: str) -> AgentResponse:
         """Generate routing/synthesis code and execute it.
 
         Used by the orchestrator for complex queries where the LLM decides
         how to decompose the problem and which sub-agents to spawn.
         The sandbox must already have ``spawn_agent`` injected before calling.
+
+        A separate, long-timeout REPL is used because each spawn_agent() call
+        blocks for an LLM round-trip (15–30 s). The default 10 s sandbox
+        timeout would cancel the code before any sub-agent returns.
 
         Args:
             routing_task: Natural language description of the routing/synthesis task.
@@ -492,7 +578,24 @@ class ReplAgent(BaseAgent):
             if code.endswith("```"):
                 code = code[:-3].strip()
 
-        return await self._execute_and_respond(code, mode="routing", generated_code=code)
+        # Build a routing-specific REPL with extended timeout and copy all
+        # objects that were injected into the main REPL (spawn_agent, graph data…)
+        routing_repl = SandboxedREPL(timeout=self._ROUTING_TIMEOUT)
+        for key, val in self._repl._namespace.items():
+            if key != "__builtins__":
+                routing_repl.inject(key, val)
+
+        # Swap in the routing REPL for the duration of this call
+        original_repl = self._repl
+        self._repl = routing_repl
+        try:
+            response = await self._execute_and_respond(
+                code, mode="routing", generated_code=code
+            )
+        finally:
+            self._repl = original_repl  # always restore
+
+        return response
 
     async def _execute_and_respond(
         self,
@@ -522,18 +625,27 @@ class ReplAgent(BaseAgent):
             parts.append(f"Result: {result.return_value}")
         answer = "\n".join(parts) if parts else "Code executed successfully (no output)."
 
-        # Try to extract structured verification result
         repl_result = self._repl._namespace.get("result")
-        confidence = 0.6  # Base confidence for executed code
-        if isinstance(repl_result, dict):
-            if "supported" in repl_result:
-                confidence = 0.8 if repl_result["supported"] else 0.3
+        confidence = 0.6  # Base confidence for successfully executed code
 
-        # Lift answer and confidence from `result` dict if routing mode set it
-        repl_dict = self._repl._namespace.get("result")
-        if isinstance(repl_dict, dict) and "answer" in repl_dict:
-            answer = str(repl_dict["answer"])
-            confidence = float(repl_dict.get("confidence", confidence))
+        if mode in ("routing", "analysis"):
+            # Routing/analysis mode: the result dict carries answer + confidence set
+            # by the LLM after synthesising or analysing data. Honour that value
+            # directly and apply a floor so a good answer never scores below 0.5.
+            if isinstance(repl_result, dict) and "answer" in repl_result:
+                answer = str(repl_result["answer"])
+                raw_conf = float(repl_result.get("confidence", confidence))
+                # Floor: if the LLM produced a substantive answer, confidence ≥ 0.5
+                confidence = max(raw_conf, 0.5) if answer.strip() else raw_conf
+        else:
+            # Verification mode: "supported" bool drives the confidence signal.
+            if isinstance(repl_result, dict):
+                if "supported" in repl_result:
+                    confidence = 0.8 if repl_result["supported"] else 0.3
+            # Lift answer/confidence from result dict if present
+            if isinstance(repl_result, dict) and "answer" in repl_result:
+                answer = str(repl_result["answer"])
+                confidence = float(repl_result.get("confidence", confidence))
 
         return AgentResponse(
             answer=answer,
@@ -692,7 +804,10 @@ class AgentSpawner:
 
         child_query = AgentQuery(
             query=task,
-            context={"injected_objects": list(objects.keys())},
+            context={
+                "mode": "analysis",
+                "injected_objects": list(objects.keys()),
+            },
         )
         response = await child_agent.process(child_query)
 
