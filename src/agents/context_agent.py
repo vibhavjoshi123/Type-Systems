@@ -24,6 +24,7 @@ class ContextAgent(BaseAgent):
     """
 
     def __init__(self, traversal: HypergraphTraversal) -> None:
+        super().__init__()
         self._traversal = traversal
 
     @property

@@ -1,7 +1,11 @@
 """Query endpoint for natural language queries against the hypergraph.
 
-Wires together the multi-agent system: ContextAgent finds paths,
-ExecutiveAgent reasons over context using Claude.
+Uses the OrchestratorAgent to dynamically route queries:
+- Simple lookups skip the LLM and return graph structure directly
+- Standard queries run ContextAgent → ExecutiveAgent (with iterative verification)
+- Complex multi-entity queries fan out to per-entity sub-agents, then synthesize
+
+The orchestrator replaces the previous fixed 3-step pipeline.
 """
 
 from __future__ import annotations
@@ -13,8 +17,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from src.agents.base import AgentQuery
-from src.agents.context_agent import ContextAgent
-from src.agents.executive_agent import ExecutiveAgent
+from src.agents.orchestrator import OrchestratorAgent
 from src.models.decisions import TwoMorphismType
 from src.models.hyperedges import Hyperedge, RelationType, RoleAssignment
 from src.typedb.client import TypeDBClient
@@ -45,6 +48,9 @@ class QueryResponse(BaseModel):
     confidence: float = 0.0
     two_morphisms_proposed: int = 0
     two_morphisms_stored: int = 0
+    routing_strategy: str = ""
+    sub_agents_spawned: int = 0
+    spawn_log: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ── Per-type queries for full attributes ────────────────────────────
@@ -242,10 +248,14 @@ async def query_context_graph(
 ) -> QueryResponse:
     """Query the context graph with a natural language question.
 
-    Pipeline:
+    Pipeline (adaptive, driven by OrchestratorAgent):
     1. Fetch rich entity and hyperedge data from TypeDB
-    2. ContextAgent: traverses real hypergraph with s-adjacency
-    3. ExecutiveAgent: uses Claude to reason over the full context
+    2. Orchestrator classifies query complexity
+    3. Routes to appropriate strategy:
+       - SIMPLE: graph traversal only
+       - STANDARD: traversal → iterative LLM reasoning
+       - COMPLEX: per-entity fan-out → synthesis → governance
+    4. Write 2-morphism proposals back to TypeDB (feedback loop)
     """
     db = getattr(req.app.state, "db", None)
     llm = getattr(req.app.state, "llm", None)
@@ -263,42 +273,41 @@ async def query_context_graph(
         except Exception as exc:
             logger.warning("Failed to fetch graph context: %s", exc)
 
-    # Step 2: ContextAgent — real s-adjacency traversal
+    # Step 2: Create the orchestrator with the current graph state
     traversal = HypergraphTraversal(he_objects if he_objects else None)
-    context_agent = ContextAgent(traversal)
-    context_query = AgentQuery(
-        query=request.query,
-        intersection_size=request.intersection_size,
-        max_depth=request.max_depth,
+    orchestrator = OrchestratorAgent(
+        traversal=traversal,
+        llm=llm,
+        entities=entities,
+        hyperedges=decisions,
     )
-    context_response = await context_agent.process(context_query)
 
-    # Step 3: ExecutiveAgent — LLM reasoning over full context
-    executive_agent = ExecutiveAgent(llm=llm)
-    exec_query = AgentQuery(
+    # Step 3: Let the orchestrator decide the execution strategy
+    agent_query = AgentQuery(
         query=request.query,
-        context={
-            "paths": context_response.evidence,
-            "entities": entities,
-            "hyperedges": decisions,
-            "graph_summary": context_response.answer,
-        },
         intersection_size=request.intersection_size,
         max_depth=request.max_depth,
     )
-    exec_response = await executive_agent.process(exec_query)
+    response = await orchestrator.process(agent_query)
 
     # Step 4: Write 2-morphism proposals back to TypeDB
-    proposals = exec_response.metadata.get("two_morphism_proposals", [])
+    proposals = response.metadata.get("two_morphism_proposals", [])
     stored = 0
     if proposals and db and db.is_connected:
         stored = await _store_2morphisms(db, proposals)
 
+    routing = response.metadata.get("routing", {})
+
+    spawn_log = routing.get("spawn_log", [])
+
     return QueryResponse(
-        answer=exec_response.answer,
-        evidence=exec_response.evidence,
-        paths_found=exec_response.paths_found or context_response.paths_found,
-        confidence=exec_response.confidence,
+        answer=response.answer,
+        evidence=response.evidence,
+        paths_found=response.paths_found,
+        confidence=response.confidence,
         two_morphisms_proposed=len(proposals),
         two_morphisms_stored=stored,
+        routing_strategy=routing.get("strategy", ""),
+        sub_agents_spawned=routing.get("sub_agents_spawned", len(spawn_log)),
+        spawn_log=spawn_log,
     )
