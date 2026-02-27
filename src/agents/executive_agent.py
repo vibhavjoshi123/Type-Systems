@@ -254,6 +254,13 @@ class ExecutiveAgent(BaseAgent):
         """
         assert self._llm is not None
 
+        # Inject spawner into the REPL so LLM-generated verification code
+        # can autonomously delegate subtasks to fresh sub-agents.
+        if self._repl_agent:
+            from src.agents.repl import AgentSpawner
+            spawner = AgentSpawner(llm=self._llm, depth=self._delegation_depth)
+            self._repl_agent.repl.inject("spawn_agent", spawner)
+
         current_reasoning = ""
         best_confidence = 0.0
         best_reasoning = ""
@@ -341,6 +348,12 @@ class ExecutiveAgent(BaseAgent):
         # Extract 2-morphism proposals from the final reasoning
         proposals = await self._extract_2morphisms(final_reasoning, hyperedges)
 
+        spawn_log: list[dict[str, Any]] = []
+        if self._repl_agent:
+            spawner_obj = self._repl_agent.repl._namespace.get("spawn_agent")
+            if hasattr(spawner_obj, "spawn_log"):
+                spawn_log = spawner_obj.spawn_log
+
         return AgentResponse(
             answer=final_reasoning,
             evidence=[{
@@ -355,6 +368,7 @@ class ExecutiveAgent(BaseAgent):
                 "reasoning_iterations": len(iteration_log),
                 "iteration_log": iteration_log,
                 "verified": best_confidence >= CONFIDENCE_THRESHOLD,
+                "sub_agent_spawns": spawn_log,
             },
         )
 

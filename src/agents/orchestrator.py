@@ -24,7 +24,7 @@ from src.agents.base import AgentQuery, AgentResponse, BaseAgent, DelegationRequ
 from src.agents.context_agent import ContextAgent
 from src.agents.executive_agent import ExecutiveAgent
 from src.agents.governance_agent import GovernanceAgent
-from src.agents.repl import ReplAgent
+from src.agents.repl import AgentSpawner, ReplAgent, _ROUTING_PROMPT
 from src.typedb.traversal import HypergraphTraversal
 
 logger = logging.getLogger(__name__)
@@ -239,72 +239,95 @@ class OrchestratorAgent(BaseAgent):
         query: AgentQuery,
         classification: QueryClassification,
     ) -> AgentResponse:
-        """Complex query: fan out per-entity analysis, then synthesize.
+        """Complex query: LLM decides how to decompose via REPL + spawn_agent.
 
-        For queries mentioning multiple entities, delegates a focused
-        sub-query per entity to gather entity-specific context, then
-        synthesizes the results in a final reasoning pass.
+        Rather than pre-programming which sub-agents to call and in what order,
+        we inject a ``spawn_agent`` callable into the REPL and let the LLM write
+        code that decides decomposition autonomously — it can fan out (width),
+        go deep (sequential spawns), or mix both.
+
+        Falls back to a single traversal pass if REPL routing fails.
         """
-        # Step 1: Gather per-entity context via fan-out
-        entity_contexts: list[AgentResponse | None] = []
+        # Inject spawner so the LLM's code can delegate subtasks
+        spawner = AgentSpawner(llm=self._llm, depth=self._delegation_depth)
+        self._repl_agent.repl.inject("spawn_agent", spawner)
 
-        if classification.entity_mentions and self.can_delegate:
-            requests = [
-                DelegationRequest(
-                    target_agent="context_agent",
-                    sub_query=AgentQuery(
-                        query=f"Find all context for entity: {entity_name}",
-                        intersection_size=query.intersection_size,
-                        max_depth=query.max_depth,
-                    ),
-                    rationale=f"Per-entity context for: {entity_name}",
+        # Build the routing task and attempt REPL-based decomposition
+        routing_task = _ROUTING_PROMPT.format(
+            query=query.query,
+            entity_mentions=classification.entity_mentions or "none detected",
+            n_entities=len(self._entities),
+            n_hyperedges=len(self._hyperedges),
+        )
+
+        repl_response: AgentResponse | None = None
+        if self._llm:
+            try:
+                repl_response = await self._repl_agent.route_with_code(routing_task)
+                logger.info(
+                    "REPL routing completed: confidence=%.2f, sub-agents spawned=%d",
+                    repl_response.confidence,
+                    len(spawner.spawn_log),
                 )
-                for entity_name in classification.entity_mentions
-            ]
-            entity_contexts = await self.fan_out(requests)
+            except Exception as exc:
+                logger.warning("REPL routing failed, falling back: %s", exc)
 
-        # Step 2: Build combined context from per-entity results
-        combined_evidence: list[dict[str, Any]] = []
-        for resp in entity_contexts:
-            if resp is not None:
-                combined_evidence.extend(resp.evidence)
+        # If REPL routing produced a meaningful answer, use it
+        if repl_response and repl_response.confidence > 0.1:
+            governance_response = None
+            if classification.needs_governance:
+                governance_response = await self._run_governance(repl_response)
 
-        # Fallback: if fan-out produced nothing, do a single traversal
-        if not combined_evidence:
-            context_response = await self._context_agent.process(query)
-            combined_evidence = context_response.evidence
-            graph_summary = context_response.answer
-        else:
-            graph_summary = (
-                f"Analyzed {len(classification.entity_mentions)} entities via "
-                f"focused sub-queries: {', '.join(classification.entity_mentions)}"
+            metadata = dict(repl_response.metadata)
+            metadata["routing"] = {
+                "strategy": "complex",
+                "reason": classification.reason,
+                "sub_agents_spawned": len(spawner.spawn_log),
+                "spawn_log": spawner.spawn_log,
+            }
+            if governance_response:
+                metadata["governance"] = {
+                    "compliant": governance_response.metadata.get("compliant"),
+                    "answer": governance_response.answer,
+                }
+
+            answer = repl_response.answer
+            if governance_response and governance_response.metadata.get("compliant") is False:
+                answer += f"\n\n[Governance Warning] {governance_response.answer}"
+
+            return AgentResponse(
+                answer=answer,
+                evidence=repl_response.evidence,
+                paths_found=repl_response.paths_found,
+                confidence=repl_response.confidence,
+                metadata=metadata,
             )
 
-        # Step 3: Executive reasoning over the combined context
+        # Fallback: single traversal pass through executive agent
+        logger.info("Falling back to single traversal for complex query")
+        context_response = await self._context_agent.process(query)
         exec_query = AgentQuery(
             query=query.query,
             context={
-                "paths": combined_evidence,
+                "paths": context_response.evidence,
                 "entities": self._entities,
                 "hyperedges": self._hyperedges,
-                "graph_summary": graph_summary,
+                "graph_summary": context_response.answer,
             },
             intersection_size=query.intersection_size,
             max_depth=query.max_depth,
         )
         exec_response = await self._executive_agent.process(exec_query)
-
-        # Step 4: Governance if needed
         governance_response = None
         if classification.needs_governance:
             governance_response = await self._run_governance(exec_response)
 
         return self._build_response(
             exec_response,
-            None,
+            context_response,
             governance_response,
             strategy="complex",
-            reason=classification.reason,
+            reason=classification.reason + " (fallback)",
             fan_out_count=len(classification.entity_mentions),
         )
 

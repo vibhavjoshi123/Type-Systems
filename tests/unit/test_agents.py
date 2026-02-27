@@ -476,7 +476,7 @@ class TestSandboxedREPL:
 
     @pytest.mark.asyncio
     async def test_inject_live_object(self):
-        """Injected objects are live references, not copies — like Agentica."""
+        """Injected objects are live references, not copies."""
         repl = SandboxedREPL()
         entities = [{"name": "Acme"}, {"name": "Globex"}]
         repl.inject("entities", entities)

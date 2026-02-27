@@ -2,8 +2,7 @@
 
 Provides a persistent Python execution environment that agents can use
 to verify hypotheses, explore graph data, and run programmatic checks
-against the hypergraph — similar to the Agentica REPL model where
-agents interleave reasoning with code execution.
+against the hypergraph, interleaving reasoning with code execution.
 
 Security model:
 - Restricted builtins (no file I/O, no eval/exec, no subprocess)
@@ -18,6 +17,7 @@ import asyncio
 import io
 import logging
 import sys
+import threading
 import traceback
 import time
 from contextlib import redirect_stdout, redirect_stderr
@@ -274,15 +274,55 @@ def _is_serializable(obj: Any) -> bool:
 _CODE_GEN_SYSTEM = (
     "You are a code generation engine for verifying hypotheses against "
     "enterprise hypergraph data. You write concise Python code that checks "
-    "claims programmatically. The sandbox has these variables pre-loaded:\n"
+    "claims programmatically. Variables available in the sandbox:\n"
     "- `entities`: list[dict] — entity records with 'name', 'entity_id', etc.\n"
     "- `hyperedges`: list[dict] — decision events with 'decision_type', 'rationale', role players\n"
     "- `traversal`: HypergraphTraversal — call .find_s_connected_components(s), "
     ".hub_nodes(min_degree), .get_s_neighbors(idx, s), .bfs(start, target, s)\n"
-    "- `paths`: list — context path data from graph traversal\n\n"
+    "- `paths`: list — context path data from graph traversal\n"
+    "- `spawn_agent(task, **objects)` — delegate a focused subtask to a fresh sub-agent;\n"
+    "  returns dict with 'answer' (str), 'confidence' (float), 'result' (any).\n"
+    "  Example: r = spawn_agent('count decisions for Acme', entities=entities)\n\n"
+    "Not all variables may be present — use only what exists in scope. "
     "Output ONLY valid Python code, no markdown fences, no explanation. "
     "Store your final answer in a variable called `result`."
 )
+
+# ── Routing/synthesis prompts (used by OrchestratorAgent) ─────────
+
+_ROUTING_SYSTEM = (
+    "You are a routing and synthesis agent for an enterprise decision hypergraph. "
+    "You have live graph data and can spawn focused sub-agents for subtasks.\n\n"
+    "Available in scope:\n"
+    "- `spawn_agent(task, **objects)` — spawn a sub-agent with live object access;\n"
+    "  returns dict with 'answer' (str), 'confidence' (float), 'result' (any).\n"
+    "- `entities` — list of all entity dicts\n"
+    "- `hyperedges` — list of decision event dicts\n"
+    "- `traversal` — HypergraphTraversal for graph operations\n\n"
+    "Decompose the query, spawn sub-agents for each part, then synthesize.\n"
+    "Example:\n"
+    "  r1 = spawn_agent('Analyze decisions for Acme Corp', "
+    "entities=entities, hyperedges=hyperedges)\n"
+    "  r2 = spawn_agent('Find connections between Acme and Globex', "
+    "traversal=traversal, hyperedges=hyperedges)\n"
+    "  result = {'answer': r1['answer'] + '\\n' + r2['answer'], "
+    "'confidence': (r1['confidence'] + r2['confidence']) / 2}\n\n"
+    "Output ONLY valid Python code, no markdown fences, no explanation. "
+    "Store the synthesized answer in `result` as: {'answer': str, 'confidence': float}."
+)
+
+_ROUTING_PROMPT = """Decompose and analyze this query by spawning focused sub-agents.
+
+Query: {query}
+
+Entity mentions detected: {entity_mentions}
+Total entities available: {n_entities}
+Total decision hyperedges: {n_hyperedges}
+
+Use spawn_agent() to delegate focused subtasks to sub-agents that each receive only
+the relevant data they need. Then synthesize their results into a final answer.
+Store the final synthesized answer in `result` as a dict with 'answer' and 'confidence'.
+"""
 
 _CODE_GEN_PROMPT = """Write Python code to verify this hypothesis against the graph data.
 
@@ -413,6 +453,47 @@ class ReplAgent(BaseAgent):
             code, mode="generated", generated_code=code
         )
 
+    async def route_with_code(self, routing_task: str) -> AgentResponse:
+        """Generate routing/synthesis code and execute it.
+
+        Used by the orchestrator for complex queries where the LLM decides
+        how to decompose the problem and which sub-agents to spawn.
+        The sandbox must already have ``spawn_agent`` injected before calling.
+
+        Args:
+            routing_task: Natural language description of the routing/synthesis task.
+
+        Returns:
+            AgentResponse with the synthesized result.
+        """
+        if not self._llm:
+            return AgentResponse(
+                answer="No LLM configured for routing.",
+                confidence=0.0,
+            )
+
+        try:
+            generated_code = await self._llm.complete(
+                prompt=routing_task,
+                system_prompt=_ROUTING_SYSTEM,
+            )
+        except Exception as exc:
+            logger.warning("Routing code generation failed: %s", exc)
+            return AgentResponse(
+                answer=f"Routing code generation failed: {exc}",
+                confidence=0.0,
+                metadata={"mode": "routing_failed", "error": str(exc)},
+            )
+
+        code = generated_code.strip()
+        if code.startswith("```"):
+            lines = code.split("\n")
+            code = "\n".join(lines[1:])
+            if code.endswith("```"):
+                code = code[:-3].strip()
+
+        return await self._execute_and_respond(code, mode="routing", generated_code=code)
+
     async def _execute_and_respond(
         self,
         code: str,
@@ -448,6 +529,12 @@ class ReplAgent(BaseAgent):
             if "supported" in repl_result:
                 confidence = 0.8 if repl_result["supported"] else 0.3
 
+        # Lift answer and confidence from `result` dict if routing mode set it
+        repl_dict = self._repl._namespace.get("result")
+        if isinstance(repl_dict, dict) and "answer" in repl_dict:
+            answer = str(repl_dict["answer"])
+            confidence = float(repl_dict.get("confidence", confidence))
+
         return AgentResponse(
             answer=answer,
             evidence=[{
@@ -465,3 +552,141 @@ class ReplAgent(BaseAgent):
                 "namespace_keys": self._repl.namespace_keys,
             },
         )
+
+
+# ── AgentSpawner ──────────────────────────────────────────────────
+
+
+class AgentSpawner:
+    """Callable that spawns focused sub-agents from within REPL code.
+
+    Injected into the REPL namespace so LLM-generated code can autonomously
+    delegate subtasks with live object passing — no serialization required.
+
+    Sub-agents get their own fresh REPL with only the objects explicitly
+    passed, preventing context rot. Each spawned agent also receives a child
+    spawner so true recursive delegation is possible.
+
+    Usage inside REPL code::
+
+        r = spawn_agent(
+            "find all decisions involving Acme Corp",
+            entities=entities,
+            hyperedges=hyperedges,
+        )
+        print(r["answer"], r["confidence"])
+
+        # Fan-out (width): spawn multiple in a loop
+        results = [
+            spawn_agent(f"analyse {e['name']}", entity=e, hyperedges=hyperedges)
+            for e in entities[:3]
+        ]
+
+        # Deep dive (depth): pass a spawner result into another spawn
+        summary = spawn_agent("summarise findings", raw=results)
+    """
+
+    MAX_SPAWN_DEPTH = 4
+
+    def __init__(self, llm: Any = None, depth: int = 0) -> None:
+        self._llm = llm
+        self._depth = depth
+        self.spawn_log: list[dict[str, Any]] = []
+
+    def __call__(self, task: str, **objects: Any) -> dict[str, Any]:
+        """Spawn a sub-agent synchronously from REPL code.
+
+        Creates a new thread with its own event loop so async spawning
+        can be called from synchronous REPL execution without nesting loops.
+
+        Args:
+            task: Natural language description of the subtask.
+            **objects: Live Python objects injected into the sub-agent's REPL
+                       by reference — no serialization.
+
+        Returns:
+            dict with keys: answer (str), confidence (float),
+            result (value stored in sub-agent's ``result`` variable),
+            spawn_log (list of any further spawns the sub-agent made).
+        """
+        if self._depth >= self.MAX_SPAWN_DEPTH:
+            logger.warning(
+                "AgentSpawner: max depth %d reached, skipping spawn for: %s",
+                self.MAX_SPAWN_DEPTH,
+                task[:80],
+            )
+            return {"answer": "Max spawn depth reached.", "confidence": 0.0, "result": None}
+
+        outcome: dict[str, Any] = {}
+        exc_bucket: list[Exception] = []
+
+        def _run() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                outcome["value"] = loop.run_until_complete(
+                    self._spawn_async(task, objects)
+                )
+            except Exception as exc:
+                exc_bucket.append(exc)
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=30)
+
+        if exc_bucket:
+            logger.warning("Sub-agent '%s' raised: %s", task[:60], exc_bucket[0])
+            return {"answer": f"Sub-agent error: {exc_bucket[0]}", "confidence": 0.0, "result": None}
+
+        result = outcome.get(
+            "value",
+            {"answer": "Sub-agent timed out.", "confidence": 0.0, "result": None},
+        )
+        self.spawn_log.append({
+            "task": task,
+            "objects_passed": list(objects.keys()),
+            "confidence": result.get("confidence", 0.0),
+        })
+        logger.info(
+            "AgentSpawner (depth=%d): spawned '%s' → confidence=%.2f",
+            self._depth,
+            task[:60],
+            result.get("confidence", 0.0),
+        )
+        return result
+
+    async def _spawn_async(self, task: str, objects: dict[str, Any]) -> dict[str, Any]:
+        """Create and run a fresh sub-agent with the given live objects."""
+        # Fresh sandbox — sub-agent only sees what's explicitly passed
+        child_sandbox = SandboxedREPL()
+
+        # Inject live Python objects by reference (no serialization)
+        for name, obj in objects.items():
+            child_sandbox.inject(name, obj)
+
+        # Inject a child spawner so the sub-agent can spawn further agents
+        child_spawner = AgentSpawner(llm=self._llm, depth=self._depth + 1)
+        child_sandbox.inject("spawn_agent", child_spawner)
+
+        # Build and wire the child agent
+        child_agent = ReplAgent(llm=self._llm)
+        child_agent._repl = child_sandbox
+
+        child_query = AgentQuery(
+            query=task,
+            context={"injected_objects": list(objects.keys())},
+        )
+        response = await child_agent.process(child_query)
+
+        # Sub-agent may store a primary result in the `result` variable
+        sub_result = child_sandbox._namespace.get("result")
+
+        return {
+            "answer": response.answer,
+            "confidence": response.confidence,
+            "result": sub_result,
+            "metadata": response.metadata,
+            "spawn_log": child_spawner.spawn_log,
+        }
