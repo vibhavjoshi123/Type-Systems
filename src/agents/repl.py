@@ -590,6 +590,10 @@ class AgentSpawner:
 
     def __init__(self, llm: Any = None, depth: int = 0) -> None:
         self._llm = llm
+        # Store config (not the connector instance) so child threads can create
+        # their own fresh connectors — an AsyncAnthropic client is bound to the
+        # event loop where it was first used and cannot be shared across loops.
+        self._llm_config = getattr(llm, "config", None)
         self._depth = depth
         self.spawn_log: list[dict[str, Any]] = []
 
@@ -666,12 +670,24 @@ class AgentSpawner:
         for name, obj in objects.items():
             child_sandbox.inject(name, obj)
 
-        # Inject a child spawner so the sub-agent can spawn further agents
+        # Inject a child spawner so the sub-agent can spawn further agents.
+        # Pass self._llm so the child spawner can also extract config.
         child_spawner = AgentSpawner(llm=self._llm, depth=self._depth + 1)
         child_sandbox.inject("spawn_agent", child_spawner)
 
-        # Build and wire the child agent
-        child_agent = ReplAgent(llm=self._llm)
+        # Create a FRESH LLM connector for the child agent.
+        # We must NOT reuse the parent's connector: its AsyncAnthropic client
+        # is bound to the parent event loop and cannot run in this child loop.
+        child_llm = None
+        if self._llm_config is not None:
+            try:
+                from src.llm.anthropic import AnthropicConnector
+                child_llm = AnthropicConnector(config=self._llm_config)
+            except Exception as exc:
+                logger.warning("Could not create child LLM connector: %s", exc)
+
+        # Build and wire the child agent with its own fresh sandbox + connector
+        child_agent = ReplAgent(llm=child_llm)
         child_agent._repl = child_sandbox
 
         child_query = AgentQuery(
