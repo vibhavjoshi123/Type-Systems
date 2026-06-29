@@ -877,52 +877,11 @@ Our n-morphism architecture handles this via the self-referential `n-morphism` r
 
 ---
 
-## 11. Integration with Existing Memory System
-
-### 11.1 Skill Store for Regulatory Patterns
-
-The self-evolving memory's `skill_store.py` learns regulatory evaluation patterns:
-
-```python
-# After repeated FLSA exemption checks, the system learns:
-Skill(
-    skill_id="skill_flsa_computer_exempt",
-    domain="employment-law",
-    description="Computer Employee exemption classification",
-    trigger_patterns=["overtime exempt", "computer employee", "FLSA 213(a)(17)"],
-    learned_prior=0.82,  # π_rel: 82% of software workers qualify
-)
-```
-
-### 11.2 Intent Resolution for Legal Queries
-
-The `intent_resolver.py` maps natural language to regulatory entities:
-
-```python
-# "Is our Iowa plant exempt from Title V?"
-domain_hints = ["environmental", "emissions", "Title V"]
-entity_hints = ["le_acme_iowa", "reg_caa_v"]
-# → Routes to ContextAgent with regulatory-determination traversal
-```
-
-### 11.3 Progressive Loading for Large Regulatory Graphs
-
-The `context_loader.py` 3-tier JIT loading prevents loading the entire regulatory corpus:
-
-```
-Tier 1 (Metadata): Load regulation IDs, jurisdiction codes, active status
-Tier 2 (Skills):   Load applicable regulatory skills for this entity type
-Tier 3 (Entities): Load only the specific prongs and requirements needed
-                    for the determination being evaluated
-```
-
----
-
-## 12. The Rules-as-Code Interface
+## 11. The Rules-as-Code Interface
 
 The architecture is designed to consume **Rules as Code** (RaC) APIs — regulations published as executable code by governing bodies.
 
-### 12.1 External Rule Source Integration
+### 11.1 External Rule Source Integration
 
 ```python
 class RulesAsCodeConnector:
@@ -955,7 +914,7 @@ class RulesAsCodeConnector:
         ...
 ```
 
-### 12.2 Catala / s(CASP) Integration Points
+### 11.2 Catala / s(CASP) Integration Points
 
 The symbolic layer can delegate to external provers:
 
@@ -967,85 +926,306 @@ The symbolic layer can delegate to external provers:
 
 ---
 
-## 13. Strongly-Typed Tool Registry — Fixing MCP Shortcomings
+## 12. Strongly-Typed Tool Registry
 
-The CategoryScienceClaw architecture demonstrates the same Curry-Howard mechanism applied to scientific discovery: artifacts have types, tools are morphisms between types, and the type system rejects invalid compositions before compute spends a cycle.
+In standard agentic architectures (MCP, LangChain, etc.), tools are untyped strings — the agent receives a flat list of tool descriptions and must infer which tool fits. This fails at scale: 200 tools in context overwhelms the LLM, and nothing prevents the agent from feeding a customer record into a penalty calculator. The typed tool registry solves both problems by treating every skill as a mathematical morphism with strict input/output type signatures.
 
-### 13.1 Skills as Typed Morphisms
+### 12.1 The Core Principle: Skills as Typed Morphisms
 
-Every skill is a strict morphism `f: A → B`. The type system rejects invalid tool application before execution.
-
-**CategoryScienceClaw (Chemistry Domain):**
-
-```
-# Typed skills in materials science:
-Skill: extract_features
-  Type: Protein → FeatureVector
-  
-Skill: compute_stiffness
-  Type: FeatureVector → StiffnessTensor
-
-Skill: fit_surrogate
-  Type: (FeatureVector, StiffnessTensor) → SurrogateModel
-
-# REJECTED at type-check: cannot feed a Protein directly to fit_surrogate
-# fit_surrogate expects (FeatureVector, StiffnessTensor), not Protein
-# The category theory engine blocks this BEFORE any compute happens
-```
-
-**Our Regulatory Domain — Same Pattern, Different Type Alphabet:**
+Every skill is a strict morphism `f: A → B` — a typed function from input artifact to output artifact. The type system rejects invalid tool application **before execution**, not after.
 
 ```python
-# Typed skills for regulatory compliance:
+class SkillMorphism(BaseModel):
+    """A typed skill in the regulatory tool registry.
+    
+    Every skill declares its input types, output type, and effect type.
+    The type checker verifies composition validity at registration time,
+    not at execution time — invalid pipelines never run.
+    """
+    skill_id: str
+    input_types: list[str]       # Domain types (the morphism's source)
+    output_type: str             # Codomain type (the morphism's target)
+    effect_type: EffectType      # What kind of operation this performs
+    constraints: dict[str, str]  # Additional type-level constraints
+    evaluation_strategy: str     # "conjunction" | "disjunction" | "totality"
+```
 
-# Skill 1: Classification (disjunction — commit on first true)
-SkillMorphism(
+### 12.2 The Full Regulatory Skill Registry
+
+```python
+class EffectType(StrEnum):
+    CLASSIFY          = "classify"           # Determine status (exempt/non-exempt)
+    THRESHOLD_CHECK   = "threshold-check"    # Evaluate numeric/geographic conditions
+    PENALTY_CALCULATE = "penalty-calculate"  # Compute enforcement amounts
+    TRANSFER_VALIDATE = "transfer-validate"  # Validate cross-border data flows
+    AUDIT_VERIFY      = "audit-verify"       # Verify compliance audit findings
+    PREEMPTION_CHECK  = "preemption-check"   # Resolve federal/state conflicts
+    TEMPORAL_VALIDATE = "temporal-validate"   # Check bi-temporal validity windows
+
+# ──── EMPLOYMENT LAW SKILLS ────
+
+skill_flsa_exemption = SkillMorphism(
     skill_id="skill_flsa_exemption_check",
-    input_types=["LegalEntity", "Regulation"],
+    input_types=["LegalEntity", "Employee", "Regulation"],
     output_type="RegulatoryDetermination",
-    effect_type="CLASSIFY",
-    constraints={"regulation.rule_type": "disjunction"},
+    effect_type=EffectType.CLASSIFY,
+    constraints={
+        "regulation.statute_citation": "29 USC § 213(a)",
+        "regulation.rule_type": "disjunction",
+    },
+    evaluation_strategy="disjunction",
+    # Branches: Executive | Administrative | Professional | Computer | Outside Sales
+    # COMMITS on first true branch
 )
 
-# Skill 2: Threshold evaluation (conjunction — prune on first false)
-SkillMorphism(
+skill_abc_test = SkillMorphism(
+    skill_id="skill_abc_test_ca",
+    input_types=["LegalEntity", "Employee", "Regulation"],
+    output_type="RegulatoryDetermination",
+    effect_type=EffectType.CLASSIFY,
+    constraints={
+        "regulation.statute_citation": "CA Labor Code § 2775",
+        "regulation.jurisdiction_code": "US-CA",
+        "regulation.rule_type": "conjunction",
+    },
+    evaluation_strategy="conjunction",
+    # Prongs: A (free from control) ∧ B (outside usual business) ∧ C (independent trade)
+    # PRUNES on first false prong
+)
+
+skill_independent_contractor_federal = SkillMorphism(
+    skill_id="skill_ic_economic_reality",
+    input_types=["LegalEntity", "Employee", "Regulation"],
+    output_type="RegulatoryDetermination",
+    effect_type=EffectType.CLASSIFY,
+    constraints={
+        "regulation.statute_citation": "29 CFR § 795",
+        "regulation.rule_type": "totality",
+    },
+    evaluation_strategy="totality",
+    # 6 non-determinative factors weighed against each other
+    # Requires FULL traversal — no short-circuit possible
+)
+
+# ──── ENVIRONMENTAL SKILLS ────
+
+skill_title_v_permit = SkillMorphism(
     skill_id="skill_title_v_check",
     input_types=["LegalEntity", "Regulation"],
     output_type="RegulatoryDetermination",
-    effect_type="THRESHOLD_CHECK",
-    constraints={"regulation.regulatory_body": "EPA"},
+    effect_type=EffectType.THRESHOLD_CHECK,
+    constraints={
+        "regulation.regulatory_body": "EPA",
+        "regulation.statute_citation": "42 USC § 7661",
+    },
+    evaluation_strategy="conjunction",
+    # Prongs ordered by evaluation_cost:
+    #   req_nonattainment (cost=0.01) → req_industrial_src (cost=0.05) → req_100_ton (cost=15.0)
+    # PRUNES on first false — cheapest condition first
 )
 
-# Skill 3: Penalty calculation (requires a violation as input)
-SkillMorphism(
+skill_neshap_check = SkillMorphism(
+    skill_id="skill_neshap_check",
+    input_types=["LegalEntity", "Regulation"],
+    output_type="RegulatoryDetermination",
+    effect_type=EffectType.THRESHOLD_CHECK,
+    constraints={
+        "regulation.regulatory_body": "EPA",
+        "regulation.statute_citation": "42 USC § 7412",
+    },
+    evaluation_strategy="conjunction",
+)
+
+# ──── DATA PRIVACY SKILLS ────
+
+skill_gdpr_transfer = SkillMorphism(
+    skill_id="skill_gdpr_cross_border",
+    input_types=["LegalEntity", "LegalEntity", "Regulation"],
+    output_type="RegulatoryDetermination",
+    effect_type=EffectType.TRANSFER_VALIDATE,
+    constraints={
+        "regulation.statute_citation": "GDPR Art. 46",
+        "regulation.jurisdiction_code": "EU",
+    },
+    evaluation_strategy="disjunction",
+    # Mechanisms: Adequacy Decision | SCCs | BCRs | Derogations
+    # COMMITS on first valid mechanism
+)
+
+skill_ccpa_opt_out = SkillMorphism(
+    skill_id="skill_ccpa_opt_out_check",
+    input_types=["LegalEntity", "Regulation"],
+    output_type="RegulatoryDetermination",
+    effect_type=EffectType.CLASSIFY,
+    constraints={
+        "regulation.statute_citation": "Cal. Civ. Code § 1798.120",
+        "regulation.jurisdiction_code": "US-CA",
+    },
+    evaluation_strategy="conjunction",
+)
+
+# ──── ENFORCEMENT SKILLS ────
+
+skill_penalty_calculator = SkillMorphism(
     skill_id="skill_penalty_calculator",
     input_types=["Violation", "Regulation"],
     output_type="EnforcementAction",
-    effect_type="PENALTY_CALCULATE",
+    effect_type=EffectType.PENALTY_CALCULATE,
+    constraints={},
+    evaluation_strategy="conjunction",
 )
 
-# TYPE REJECTION EXAMPLES:
-#
-# ✗ skill_penalty_calculator(le_acme_corp, reg_flsa)
-#   REJECTED: input_types expect [Violation, Regulation]
-#   but received [LegalEntity, Regulation]
-#   → "Cannot calculate penalty without a Violation"
-#
-# ✗ skill_flsa_exemption_check(viol_emissions, reg_caa_v)
-#   REJECTED: CLASSIFY skill expects LegalEntity, not Violation
-#   → "Cannot classify a violation for exemption"
-#
-# ✓ skill_flsa_exemption_check(le_acme_corp, reg_flsa)
-#   ACCEPTED: types match, proceeds to execution
+skill_preemption_resolver = SkillMorphism(
+    skill_id="skill_federal_preemption",
+    input_types=["RegulatoryDetermination", "RegulatoryDetermination"],
+    output_type="RegulatoryDetermination",
+    effect_type=EffectType.PREEMPTION_CHECK,
+    constraints={},
+    evaluation_strategy="conjunction",
+    # Input: conflicting state + federal determinations
+    # Output: which one prevails
+)
 ```
 
-The TypeDB schema enforces this at insert time — a `CLASSIFY` skill cannot inhabit a `PENALTY_CALCULATE` proposition. The `proves` relation's typed roles reject the composition before any LLM call or prong evaluation fires.
+### 12.3 Type Rejection — What Gets Blocked and Why
 
-### 13.2 Append-Only Provenance Graph for Regulatory Determinations
+The type system enforces composition safety. Here are concrete rejection examples across every domain:
 
-Every exploration branch is preserved as an immutable DAG. Every artifact links to its parents + the skill that created it. Nothing is overwritten — if a determination is later invalidated, the invalidation is a new node, not a deletion.
+```
+── EMPLOYMENT LAW ──
 
-**Regulatory Provenance Graph:**
+✗ skill_penalty_calculator(le_acme_corp, reg_flsa)
+  REJECTED: input_types expect [Violation, Regulation]
+           received [LegalEntity, Regulation]
+  Reason: "Cannot calculate penalty without a Violation.
+           First run a classification skill to determine if
+           a violation exists."
+  Fix:    Chain skills: skill_flsa_exemption_check → if violation
+          detected → skill_penalty_calculator
+
+✗ skill_abc_test_ca(le_acme_corp, emp_jane_doe, reg_flsa)
+  REJECTED: constraint mismatch
+           regulation.jurisdiction_code must be "US-CA"
+           reg_flsa.jurisdiction_code = "US-FED"
+  Reason: "ABC Test is California-only. Cannot apply state
+           test to federal regulation."
+  Fix:    Use skill_ic_economic_reality for federal classification.
+
+✗ skill_flsa_exemption_check(viol_overtime_001, emp_jane_doe, reg_flsa)
+  REJECTED: input_types[0] expects LegalEntity
+           received Violation
+  Reason: "Cannot classify a violation for exemption. A violation
+           is an output of classification, not an input."
+
+── ENVIRONMENTAL ──
+
+✗ skill_title_v_check(emp_jane_doe, reg_caa_v)
+  REJECTED: input_types expect [LegalEntity, Regulation]
+           received [Employee, Regulation]
+  Reason: "Title V applies to facilities (LegalEntity), not
+           individual employees. Employee is not a subtype
+           of LegalEntity in this schema."
+
+✗ skill_neshap_check(le_acme_iowa, reg_flsa)
+  REJECTED: constraint mismatch
+           regulation.regulatory_body must be "EPA"
+           reg_flsa.regulatory_body = "DOL"
+  Reason: "NESHAP is an EPA regulation. Cannot apply EPA
+           hazardous air pollutant check to a DOL labor statute."
+
+── DATA PRIVACY ──
+
+✗ skill_gdpr_cross_border(le_acme_corp, reg_gdpr_46)
+  REJECTED: input_types expect [LegalEntity, LegalEntity, Regulation]
+           received [LegalEntity, Regulation] (missing data processor)
+  Reason: "Cross-border transfer requires BOTH a data controller
+           AND a data processor. Single-entity evaluation is
+           insufficient under GDPR Art. 46."
+
+✗ skill_ccpa_opt_out_check(le_euro_analytics, reg_ccpa)
+  REJECTED: constraint mismatch (at runtime after type-check)
+           entity.jurisdiction_code = "EU"
+           regulation.jurisdiction_code = "US-CA"
+  Reason: "CCPA applies to California consumers. An EU-domiciled
+           entity is not subject to CCPA opt-out requirements
+           unless processing CA resident data."
+
+── ENFORCEMENT ──
+
+✗ skill_federal_preemption(det_flsa_exempt, det_title_v_permit)
+  REJECTED: preemption_check requires conflicting determinations
+           on the SAME subject matter
+           det_flsa_exempt.domain = "employment"
+           det_title_v_permit.domain = "environmental"
+  Reason: "Federal preemption resolves conflicts within the same
+           regulatory domain. Cannot preempt across domains."
+
+── VALID COMPOSITIONS ──
+
+✓ skill_flsa_exemption_check(le_acme_corp, emp_jane_doe, reg_flsa)
+  ACCEPTED: types match, constraints satisfied, proceeds to execution
+
+✓ skill_title_v_check(le_acme_iowa, reg_caa_v)
+  ACCEPTED: LegalEntity + EPA Regulation, conjunction strategy
+
+✓ skill_gdpr_cross_border(le_euro_analytics, le_us_cloud, reg_gdpr_46)
+  ACCEPTED: two LegalEntities + EU Regulation
+
+✓ skill_federal_preemption(det_flsa_exempt, det_abc_nonexempt)
+  ACCEPTED: conflicting determinations, same domain (employment)
+```
+
+### 12.4 Skill Composition Chains
+
+Typed skills compose into pipelines where the output type of one skill matches the input type of the next. Invalid chains are caught at composition time.
+
+```
+── VALID CHAIN: Classification → Penalty ──
+
+  Step 1: skill_abc_test_ca(le_acme_corp, emp_driver_01, reg_ab5)
+          Type: (LegalEntity, Employee, Regulation) → RegulatoryDetermination
+          Result: VIOLATION (Prong B = false, worker IS employee,
+                  company misclassified as contractor)
+
+  Step 2: From RegulatoryDetermination, extract Violation artifact
+          Type: RegulatoryDetermination → Violation
+          (automatic — the determination contains a detected-violation role)
+
+  Step 3: skill_penalty_calculator(viol_misclass_001, reg_ab5)
+          Type: (Violation, Regulation) → EnforcementAction
+          Result: Penalty = $25,000 per violation under CA Labor Code § 226.8
+
+── VALID CHAIN: Dual-Jurisdiction → Preemption ──
+
+  Step 1a: skill_flsa_exemption_check(le_acme_corp, emp_jane_doe, reg_flsa)
+           → det_federal: EXEMPT (Computer Employee)
+
+  Step 1b: skill_abc_test_ca(le_acme_corp, emp_jane_doe, reg_ab5)
+           → det_state: NON-EXEMPT (Prong B fails)
+           (runs in parallel — independent typed skills)
+
+  Step 2:  skill_federal_preemption(det_federal, det_state)
+           Type: (RegulatoryDetermination, RegulatoryDetermination)
+                 → RegulatoryDetermination
+           Result: State law NOT preempted — FLSA is a floor, not a ceiling.
+                   CA law provides greater protection. Employee is NON-EXEMPT
+                   for California purposes despite federal exemption.
+
+── INVALID CHAIN: Caught at Composition Time ──
+
+  Step 1: skill_title_v_check(le_acme_iowa, reg_caa_v)
+          → det_permit: NO PERMIT REQUIRED
+
+  Step 2: skill_penalty_calculator(det_permit, reg_caa_v)
+          ✗ REJECTED: skill_penalty_calculator expects [Violation, Regulation]
+                     det_permit is a RegulatoryDetermination, not a Violation
+          Reason: "No violation was detected. Cannot calculate penalty
+                   for a compliant determination."
+```
+
+### 12.5 Append-Only Provenance Graph
+
+Every skill execution is preserved as an immutable node in a DAG. Nothing is overwritten — invalidations are new nodes, not deletions.
 
 ```
                     ┌─────────────────────┐
@@ -1093,57 +1273,45 @@ Every exploration branch is preserved as an immutable DAG. Every artifact links 
               │          Outside Sales]                  │
               │ FailureArchive: det_exec (Prong B fail)  │
               └─────────────────────────────────────────┘
-              
-              # Next query about Jane Doe:
-              # FailureArchive biases away from Executive branch
-              # π_rel for Computer Employee increases
-              # Progressive disclosure surfaces Computer first
 ```
 
-The provenance graph is the **audit trail**. Every determination links to the exact skill that produced it, the exact inputs, and the exact branches that were pruned. The FailureArchive records *why* branches failed, biasing future skill selection (the Introspective MCTS pattern — learn from failures, don't repeat them).
+The provenance graph is the **audit trail**. Every determination links to the exact skill that produced it, the exact inputs, and the exact branches that were pruned. The FailureArchive records *why* branches failed, biasing future skill selection — learn from failures, don't repeat them.
 
-### 13.3 Cross-Domain Transfer via Proof Graph Traversal
+### 12.6 Cross-Jurisdiction Conflict Detection via Proof Graph
 
-The provenance graph enables cross-regulation transfer. A TypeQL function traverses the proof graph to find patterns:
+The provenance graph enables cross-regulation conflict detection. A TypeQL function traverses the proof graph:
 
 ```typeql
-# Find all entities with conflicting determinations across jurisdictions:
-fun cross_jurisdiction_conflicts($entity: legal-entity) -> { regulatory-determination, regulatory-determination }:
+fun cross_jurisdiction_conflicts($entity: legal-entity)
+    -> { regulatory-determination, regulatory-determination }:
 match
-  (subject-entity: $entity, governing-regulation: $reg1) isa regulatory-determination,
+  (subject-entity: $entity, governing-regulation: $reg1)
+    isa regulatory-determination,
     has jurisdiction-code $j1, has decision-type "exemption-classification",
     has is-active true;
-  (subject-entity: $entity, governing-regulation: $reg2) isa regulatory-determination,
+  (subject-entity: $entity, governing-regulation: $reg2)
+    isa regulatory-determination,
     has jurisdiction-code $j2, has decision-type "exemption-classification",
     has is-active true;
   not { $j1 == $j2; };
 return { $det1, $det2 };
 
-# Result: det_flsa_exempt (federal: exempt) vs det_abc_test_ca (state: employee)
-# → Flag for human review: federal and state classifications conflict
+# Result: det_flsa_exempt (federal: exempt) vs det_abc_test_ca (state: non-exempt)
+# → Automatically triggers skill_federal_preemption for resolution
 ```
 
-### 13.4 The Runtime Split: TypeDB Verifier + Python Compute
+### 12.7 The Runtime Split: TypeDB Verifier + Python Compute
 
-The KCG pattern executes typed skills during graph traversal — the database is the runtime. We deliberately diverge:
+TypeDB is the **verifier** — it enforces type constraints, stores the provenance graph, and evaluates recursive TypeQL functions for conflict detection and jurisdiction traversal. Python is the **compute** — it executes LLM calls, evaluates numeric thresholds, and performs prong evaluation logic. The type system is the **immune system** — logical hallucinations are caught at "compile-time" (schema validation) rather than "run-time" (post-hoc audit).
 
-| Layer | Scientific Discovery | Regulatory Prover |
-|-------|---------------------|-------------------|
-| **Type checking** | Category theory engine | TypeDB schema + typed roles |
-| **Structural query** | KCG traversal | TypeQL functions (recursive) |
-| **Compute** | KCG-internal execution | Python (LLM calls, prong evaluation, threshold math) |
-| **Why split** | Chemical artifacts are small | LLM calls + document parsing too expensive to route through DB |
-
-TypeDB is the **verifier**. Python is the **compute**. The type system is the **immune system** — it catches logical hallucinations at "compile-time" (schema validation) rather than "run-time" (post-hoc audit).
-
-### 13.5 Progressive Skill Disclosure (Solving MCP Context Bloat)
+### 12.8 Progressive Skill Disclosure (Solving MCP Context Bloat)
 
 MCP's failure mode: dump all available tools into context, overwhelming the LLM with irrelevant options. The typed skill registry solves this with progressive disclosure — only skills whose input types match the current artifact are surfaced.
 
 ```
 Query: "Is our Iowa plant Title V exempt?"
 
-Tier 1 — Domain routing (intent_resolver.py):
+Tier 1 — Domain routing:
     Keywords → domain = "environmental"
     → Filter: only skills with input_type containing "Regulation" 
       where regulation.regulatory_body = "EPA"
@@ -1160,28 +1328,10 @@ Tier 3 — Prong-level (only load what the chosen skill needs):
     → Load 3 requirement entities (not the entire EPA regulatory corpus)
 ```
 
-The type system acts as an automatic relevance filter — same mechanism, different domain. No heuristic prompt engineering. No context bloat. The verifier is primary, the proposer is secondary.
+The type system acts as an automatic relevance filter. No heuristic prompt engineering. No context bloat. The verifier is primary, the proposer is secondary.
 
 ---
 
 ## Summary
 
-The type system maps to regulatory reasoning with zero architectural contortion:
-
-| Type System Concept | Regulatory Application |
-|---------------------|----------------------|
-| **N-ary typed relation** | Atomic compliance determination (3-7 entities with typed roles) |
-| **S-adjacency (IS ≥ 2)** | Cross-jurisdictional conflict detection |
-| **2-morphisms** | Precedent chains, judicial invalidations, legislative amendments |
-| **N-morphisms** | Federal preemption (3-morphisms between 2-morphism chains) |
-| **Conjunction pruning** | Short-circuit on first false prong (EPA Title V) |
-| **Disjunction committing** | Short-circuit on first true branch (FLSA exemptions) |
-| **Bi-temporal model** | `valid_from`/`valid_to` for regulation versioning |
-| **TypeDB 3.x functions** | On-demand inference over live rules (no stale materialization) |
-| **Governance agent** | Coherence verification (diagram commutativity for decision traces) |
-| **Typed skill registry** | Curry-Howard morphisms: skills as `f: A → B` with type-safe composition |
-| **Append-only DAG** | Immutable provenance chain for every determination (Copresheaf pattern) |
-| **Progressive disclosure** | Type-filtered skill surfacing eliminates MCP context bloat |
-| **Skill memory** | Learned regulatory priors (π_rel) for adaptive prong ordering |
-
-The system is not a mathematical prover repurposed for law. It is a purpose-built regulatory reasoning engine where typed N-ary relations capture the atomicity of legal determinations, type-safe traversal implements structural short-circuiting, the categorical 2-morphism layer encodes defeasible logic, and the strongly-typed skill registry (the CategoryScienceClaw pattern) ensures that the verifier is primary, the proposer is secondary — all evaluated on demand against the live state of the law.
+The system is not a mathematical prover repurposed for law. It is a purpose-built regulatory reasoning engine where typed N-ary relations capture the atomicity of legal determinations, type-safe traversal implements structural short-circuiting, the categorical 2-morphism layer encodes defeasible logic, and the strongly-typed skill registry ensures that the verifier is primary, the proposer is secondary — all evaluated on demand against the live state of the law.
