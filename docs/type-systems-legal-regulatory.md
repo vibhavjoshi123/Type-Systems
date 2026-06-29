@@ -1041,57 +1041,11 @@ SkillMorphism(
 
 The TypeDB schema enforces this at insert time — a `CLASSIFY` skill cannot inhabit a `PENALTY_CALCULATE` proposition. The `proves` relation's typed roles reject the composition before any LLM call or prong evaluation fires.
 
-### 13.2 Append-Only Provenance Graph (Copresheaf Pattern)
+### 13.2 Append-Only Provenance Graph for Regulatory Determinations
 
 Every exploration branch is preserved as an immutable DAG. Every artifact links to its parents + the skill that created it. Nothing is overwritten — if a determination is later invalidated, the invalidation is a new node, not a deletion.
 
-**CategoryScienceClaw Provenance (Fiber Network Example):**
-
-```
-                    ┌─────────────────────┐
-                    │ raw_fiber_data       │  Type: RawData
-                    │ (experimental input) │
-                    └──────────┬──────────┘
-                               │
-                    extract_features: RawData → FeatureVector
-                               │
-                    ┌──────────▼──────────┐
-                    │ fiber_features       │  Type: FeatureVector
-                    │ (orientation tensor) │
-                    └────┬───────────┬────┘
-                         │           │
-    fit_isotropic        │           │  fit_anisotropic
-    FeatureVector →      │           │  FeatureVector →
-    SurrogateModel       │           │  SurrogateModel
-                         │           │
-              ┌──────────▼──┐  ┌─────▼─────────────┐
-              │ model_iso   │  │ model_aniso        │
-              │ (isotropic) │  │ (anisotropic)      │
-              └──────┬──────┘  └──────┬─────────────┘
-                     │                │
-                     └───────┬────────┘
-                             │
-                    AIC Gate: select simplest sufficient model
-                             │
-              ┌──────────────▼──────────────┐
-              │ SELECTED: model_aniso       │
-              │ AIC: 127.3 < 245.1 (iso)   │
-              │ Status: ACCEPTED            │
-              └─────────────────────────────┘
-              
-              ┌─────────────────────────────┐
-              │ REJECTED: model_iso         │
-              │ AIC: 245.1 (higher = worse) │
-              │ Status: PRUNED              │
-              │ Reason: "Isotropic model    │
-              │  misses orientation-         │
-              │  dependent stiffness"        │
-              └─────────────────────────────┘
-```
-
-Both branches preserved. The rejected model is not deleted — it's recorded with its failure reason, biasing future synthesis away from isotropic assumptions for oriented fiber networks.
-
-**Our Regulatory Provenance (Same Structure):**
+**Regulatory Provenance Graph:**
 
 ```
                     ┌─────────────────────┐
