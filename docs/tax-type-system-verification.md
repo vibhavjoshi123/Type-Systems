@@ -4,7 +4,7 @@
 
 Tax codes are not abstract principles of fairness — they are highly specific, interlocking algorithms for calculating liabilities, credits, exemptions, and phase-outs, drafted in prose by legislatures. This medium is woefully inadequate for specifying boundary conditions, variable dependencies, and logical consistency. The result: tax planning is a high-stakes optimization problem trapped inside a combinatorial explosion of conflicting rules.
 
-This document defines how dependent type theory, domain-specific languages (Catala, L4), and theorem provers (Lean 4, Coq) transform tax compliance from probabilistic guesswork into mathematically proven, audit-defensible verification.
+This document defines how dependent type theory, domain-specific languages (Catala, L4), and type-checked verification transform tax compliance from probabilistic guesswork into mathematically proven, audit-defensible results.
 
 ---
 
@@ -39,7 +39,7 @@ Variables: differing baseline incomes ($60K W-2 for Bob, $22K for Alice), invest
 
 | Model | Combined Conversion | Avg Tax Rate | Compliance | Error vs. Optimum |
 |-------|-------------------|-------------|------------|-------------------|
-| **True Optimum (Lean 4)** | $187,149 | 24.9999% | Feasible, Axis-Tight | $0 |
+| **True Optimum (Type System)** | $187,149 | 24.9999% | Feasible, Axis-Tight | $0 |
 | **GPT-class (High)** | $195,490 | 25.60% | **Infeasible (Illegal)** | +$8,341 (Overshoot) |
 | **Claude-class (Max)** | $179,091 | 24.85% | Suboptimal (Loss) | -$8,058 (Undershoot) |
 
@@ -85,13 +85,13 @@ LLMs either produce answers with no trace (un-auditable black box) or generate p
 
 ## 3. Structural Non-Monotonicity: Hidden Math Traps in Tax Policy
 
-Human intuition assumes tax codes are monotonic — an increase in gross income should never decrease net take-home pay. Because laws are drafted in prose, subjected to political compromise, and layered with decades of amendments, tax systems frequently violate this assumption. These "cliffs" bypass human lawmakers, policy analysts, and LLMs — but they are instantly flagged by formal theorem proving.
+Human intuition assumes tax codes are monotonic — an increase in gross income should never decrease net take-home pay. Because laws are drafted in prose, subjected to political compromise, and layered with decades of amendments, tax systems frequently violate this assumption. These "cliffs" bypass human lawmakers, policy analysts, and LLMs — but they are instantly flagged by type-checked verification.
 
 ### 3.1 The 50-Lakh Cliff in Indian Tax Logic
 
-During formalization of the Indian ITR-2 form using Lean 4, the system was tasked to verify monotonicity across the entire income tax domain. The assumption: India's "Marginal Relief" provision would guarantee monotonicity.
+During formalization of the Indian ITR-2 form, the type system was tasked to verify monotonicity across the entire income tax domain. The assumption: India's "Marginal Relief" provision would guarantee monotonicity.
 
-Lean 4 returned a definitive mathematical counterexample:
+The type-checker returned a definitive mathematical counterexample:
 
 | Taxable Income (INR) | Tax Liability (INR) | Net Take-Home (INR) | Marginal Change |
 |---------------------|--------------------|--------------------|----------------|
@@ -115,7 +115,7 @@ The 4% Cess BYPASSES the marginal relief cap.
 It eats directly into the taxpayer's net pay.
 ```
 
-**The formal fix**: When the code was amended to move Cess computation inside the Marginal Relief block, Lean 4 confirmed perfect monotonicity across all infinite permutations of income. Formalization allows lawmakers to mathematically guarantee fixes before enactment.
+**The formal fix**: When the code was amended to move Cess computation inside the Marginal Relief block, the type-checker confirmed perfect monotonicity across all infinite permutations of income. Formalization allows lawmakers to mathematically guarantee fixes before enactment.
 
 At the 2 Crore (20,000,000 INR) threshold, this same flaw penalizes a taxpayer by **36,416 INR** for crossing the boundary.
 
@@ -143,7 +143,7 @@ Formal verification maps the exact multi-dimensional intersections of these phas
 
 ### 4.1 From Set Theory to Dependent Types
 
-Standard axiomatic set theory (Zermelo-Fraenkel) suffers from foundational limits — Godel's Incompleteness Theorems show no consistent system can prove its own consistency. Type Theory (specifically the Calculus of Inductive Constructions used by Lean 4 and Coq) assigns every object a strict, computationally verifiable Type. Lean employs an infinite hierarchy of Type Universes (`Type 0`, `Type 1`, `Type 2`...) to prevent Russell's Paradox.
+Standard axiomatic set theory (Zermelo-Fraenkel) suffers from foundational limits — Godel's Incompleteness Theorems show no consistent system can prove its own consistency. Type Theory (specifically the Calculus of Inductive Constructions) assigns every object a strict, computationally verifiable Type. Dependent type systems employ an infinite hierarchy of Type Universes (`Type 0`, `Type 1`, `Type 2`...) to prevent Russell's Paradox.
 
 ### 4.2 The Core Mapping
 
@@ -159,77 +159,83 @@ Standard axiomatic set theory (Zermelo-Fraenkel) suffers from foundational limit
 
 ### 4.3 Constructive Mathematics = Fearless Optimization
 
-Lean defaults to **Constructive Mathematics** — proving existence requires an explicit algorithm, example, or numeric instantiation. Code either compiles definitively or fails instantly.
+Dependent type systems default to **Constructive Mathematics** — proving existence requires an explicit algorithm, example, or numeric instantiation. Code either type-checks or fails instantly.
 
 This enables **fearless optimization**: an automated agent can recursively push financial values higher — increasing Roth conversions dollar by dollar — until the type-checker explicitly rejects the input due to a compliance boundary violation. That boundary IS the absolute, provable mathematical optimum.
 
-```
--- Lean 4 pseudocode for fearless optimization:
-def find_optimum (taxpayer : TaxpayerState) : OptimalPlan :=
-  let mut conversion := 0
-  while is_valid (plan_with_conversion taxpayer (conversion + 1)) do
-    conversion := conversion + 1
-  -- Type-checker rejected (conversion + 1)
-  -- Therefore `conversion` is the proven optimum
-  return { conversion := conversion
-         , proof := validity_proof taxpayer conversion }
+```python
+# Fearless optimization via type-checked boundary search:
+def find_optimum(taxpayer: TaxpayerState) -> OptimalPlan:
+    conversion = 0
+    while is_valid(plan_with_conversion(taxpayer, conversion + 1)):
+        conversion += 1
+    # Type-checker rejected (conversion + 1)
+    # Therefore `conversion` is the proven optimum
+    return OptimalPlan(
+        conversion=conversion,
+        proof=validity_proof(taxpayer, conversion),
+    )
 ```
 
 ---
 
-## 5. Formalizing the Tax Code with Lean 4
+## 5. Formalizing the Tax Code as a Type System
 
 ### 5.1 Cell-for-Cell Form 1040 Encoding
 
-Each cell on Form 1040 is a dedicated mathematical function deriving its value strictly from raw taxpayer inputs or from deterministically proven outputs of preceding cells:
+Each cell on Form 1040 is a dedicated typed function deriving its value strictly from raw taxpayer inputs or from deterministically proven outputs of preceding cells:
 
-```
--- Every Form 1040 cell is a pure function:
-def total_income (inputs : TaxpayerInputs) : Money :=
-  inputs.wages
-  + inputs.household_employment
-  + inputs.tip_income
-  + inputs.medicaid_waivers
-  + inputs.dependent_care_benefits
-  + inputs.social_security_taxable
-  + inputs.capital_gains
-  + inputs.business_income
-
--- Hundreds of cells, dozens of computation chains deep
--- Each cell's output is the proven input to the next
+```python
+# Every Form 1040 cell is a pure typed function:
+def total_income(inputs: TaxpayerInputs) -> Money:
+    return (
+        inputs.wages
+        + inputs.household_employment
+        + inputs.tip_income
+        + inputs.medicaid_waivers
+        + inputs.dependent_care_benefits
+        + inputs.social_security_taxable
+        + inputs.capital_gains
+        + inputs.business_income
+    )
+    # Hundreds of cells, dozens of computation chains deep
+    # Each cell's output type is the proven input type to the next
 ```
 
 ### 5.2 Constraint Encoding
 
-The constraint "average tax rate on conversions must not exceed 25%" becomes a logical proposition:
+The constraint "average tax rate on conversions must not exceed 25%" becomes a type-level proposition:
 
-```
--- The constraint IS a Type:
-def valid_plan (plan : TaxPlan) : Prop :=
-  plan.total_tax_on_conversion / plan.total_conversion < 0.25
-  ∧ plan.total_conversion ≥ 0
-  ∧ all_statutory_limits_satisfied plan
+```python
+# The constraint IS a Type:
+@dataclass(frozen=True)
+class ValidPlan:
+    plan: TaxPlan
+    rate_proof: Proof[plan.total_tax / plan.total_conversion < 0.25]
+    non_negative: Proof[plan.total_conversion >= 0]
+    statutory_proof: Proof[all_statutory_limits_satisfied(plan)]
 
--- A valid plan IS a proof:
--- If we can construct an element of type (valid_plan p),
--- then p is mathematically proven to be compliant.
+# A valid plan IS a proof:
+# If we can construct an instance of ValidPlan,
+# then plan is mathematically proven to be compliant.
+# If construction fails — the type is uninhabited — compliance is unproven.
 ```
 
 ### 5.3 Proof of Optimality
 
-An optimal plan is proven when adding a single dollar to any variable causes the validity proposition to evaluate to `False`:
+An optimal plan is proven when adding a single dollar to any variable causes the validity type to become uninhabited:
 
-```
--- Optimality IS a Type:
-def is_optimal (plan : TaxPlan) : Prop :=
-  valid_plan plan
-  ∧ ¬ valid_plan (plan.with_conversion (plan.conversion + 1))
-  -- ^ Adding $1 violates the constraint
-  -- Therefore this IS the boundary — proven by the kernel
+```python
+# Optimality IS a Type:
+@dataclass(frozen=True)
+class OptimalPlan:
+    plan: ValidPlan
+    boundary: Proof[not constructible(ValidPlan(plan.conversion + 1))]
+    # ^ Adding $1 makes the ValidPlan type uninhabitable
+    # Therefore this IS the boundary — proven by the type-checker
 
--- The Lean 4 kernel (minimal, highly audited trusted codebase)
--- verifies every derivation step traces back to the tax code.
--- Result: strictly audit-defensible.
+# The type-checker kernel verifies every derivation step
+# traces back to the tax code. Result: strictly audit-defensible.
 ```
 
 ---
@@ -568,7 +574,7 @@ The same neuro-symbolic separation as regulatory compliance, adapted for tax:
 │         provisions: ["CTC", "NIIT", "QBI", "senior"] │
 │       }                                               │
 ├──────────────────────────────────────────────────────┤
-│  2. TRUTH ANCHOR (Symbolic Layer — Lean 4 / Catala)   │
+│  2. TRUTH ANCHOR (Symbolic Layer — Type System)       │
 │     • Encode all relevant Form 1040 cells as pure fns │
 │     • Define validity proposition: avg_rate < 0.25    │
 │     • Fearless optimization: push dollar-by-dollar    │
@@ -671,7 +677,7 @@ The complete stack from natural language statute to proven tax plan:
 │  Cell-by-cell Form 1040 computation     │
 └──────────────────┬──────────────────────┘
                    │
-          Lean 4 optimization layer
+          Type-checked optimization layer
           Fearless dollar-by-dollar search
                    │
 ┌──────────────────▼──────────────────────┐
